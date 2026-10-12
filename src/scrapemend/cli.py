@@ -5,6 +5,7 @@ from typing import Annotated
 import typer
 
 from scrapemend import __version__
+from scrapemend.blame import random_excuse
 
 app = typer.Typer(
     name="scrapemend",
@@ -39,3 +40,9 @@ def main(
 def version() -> None:
     """Show the version."""
     typer.echo(f"scrapemend {__version__}")
+
+
+@app.command()
+def blame() -> None:
+    """Explain why the scraper broke. Not legally binding."""
+    typer.echo(random_excuse())
