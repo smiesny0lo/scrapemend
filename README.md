@@ -13,6 +13,15 @@ When a target site changes its layout, scrapemend detects the breakage, tries fa
 - **Polite by default.** robots.txt, per-domain rate limits, an identifiable User-Agent. No CAPTCHA solving or block evasion.
 - **Works offline.** The core runs without an LLM.
 
+## Demo site
+
+`examples/mutating_site/` is a fake website whose layout can be switched while it runs, and which can simulate failures: random 503s, rate limiting, and blocking. scrapemend uses it to show that it can detect breakage and heal. See [its README](examples/mutating_site/README.md).
+
+```sh
+pip install -e ".[demo]"
+python -m examples.mutating_site --layout 1 --chaos off
+```
+
 ## Development
 
 Requires Python 3.13+.

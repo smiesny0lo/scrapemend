@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Tender notices{% endblock %} - Demo Procurement Portal</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; color: #1d2733; background: #f4f6f8; }
+    .site-nav { background: #1d4e89; padding: 0.8rem 2rem; }
+    .site-nav a { color: #fff; text-decoration: none; font-weight: 600; }
+    .page-wrapper { max-width: 72rem; margin: 0 auto; padding: 1.5rem 2rem; }
+    .tender-table { border-collapse: collapse; width: 100%; background: #fff; }
+    .tender-table th, .tender-table td { padding: 0.6rem; border-bottom: 1px solid #dde3ea; text-align: left; }
+    .pager { display: flex; gap: 1rem; margin-top: 1rem; }
+    .tender { background: #fff; padding: 1.5rem; border-radius: 6px; }
+    .meta-row { display: flex; gap: 1rem; padding: 0.3rem 0; }
+    .meta-row dt { width: 12rem; color: #5a6b7d; }
+    .meta-row dd { margin: 0; }
+    .site-footer { padding: 1rem 2rem; color: #5a6b7d; }
+  </style>
+</head>
+<body>
+  <nav class="site-nav"><a class="site-nav__brand" href="/notices">Demo Procurement Portal</a></nav>
+  <div class="page-wrapper">
+{% block content %}{% endblock %}
+  </div>
+  <div class="site-footer"><small>All notices on this site are synthetic demo data.</small></div>
+</body>
+</html>

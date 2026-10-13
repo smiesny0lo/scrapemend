@@ -1,0 +1,23 @@
+{% extends "v3/base.html" %}
+{% block content %}
+<div class="flex items-center">
+  <h2 class="text-2xl font-bold">Tender notices</h2>
+  <span class="ml-auto text-sm text-slate-500">{{ first }}-{{ last }} of {{ total }}</span>
+</div>
+<div class="grid cols-auto gap-4 mt-4">
+  {% for notice in notices %}
+  <div class="rounded-lg border bg-white p-4 shadow-sm">
+    <div class="text-xs uppercase text-slate-500">{{ notice.authority }}</div>
+    <h3 class="mt-1 font-semibold"><a href="/notices/{{ notice.id }}">{{ notice.title }}</a></h3>
+    <p class="mt-2 text-sm">Deadline: {{ notice.deadline | day }}</p>
+    <p class="text-sm font-semibold">{{ notice.value | money }}</p>
+  </div>
+  {% endfor %}
+</div>
+<div class="flex gap-2 mt-6">
+  {% for p in range(1, pages + 1) %}
+    {% if p == page %}<span class="px-3 font-bold">{{ p }}</span>{% else %}<a class="px-3" href="/notices?page={{ p }}">{{ p }}</a>{% endif %}
+  {% endfor %}
+  {% if page < pages %}<a class="px-3" href="/notices?page={{ page + 1 }}" aria-label="Next page">&rsaquo;</a>{% endif %}
+</div>
+{% endblock %}

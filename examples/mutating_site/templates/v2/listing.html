@@ -1,0 +1,29 @@
+{% extends "v2/base.html" %}
+{% block content %}
+<section class="results">
+  <h1 class="results__heading">Tender notices</h1>
+  <p class="results__count">Showing {{ first }}-{{ last }} of {{ total }} notices</p>
+  <div class="table-scroll">
+    <table class="tender-table">
+      <thead>
+        <tr><th>Title</th><th>Contracting authority</th><th>Deadline</th><th>Estimated value</th></tr>
+      </thead>
+      <tbody>
+      {% for notice in notices %}
+        <tr class="tender-row">
+          <td class="col-name"><div class="cell"><a class="tender-link" href="/notices/{{ notice.id }}">{{ notice.title }}</a></div></td>
+          <td class="col-buyer"><div class="cell">{{ notice.authority }}</div></td>
+          <td class="col-closing"><div class="cell">{{ notice.deadline | day }}</div></td>
+          <td class="col-amount"><div class="cell">{{ notice.value | money }}</div></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <nav class="pager" aria-label="Pagination">
+    {% if page > 1 %}<a class="pager__link" rel="prev" href="/notices?page={{ page - 1 }}">Previous</a>{% endif %}
+    <span class="pager__status">Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}<a class="pager__link" rel="next" href="/notices?page={{ page + 1 }}">Next</a>{% endif %}
+  </nav>
+</section>
+{% endblock %}

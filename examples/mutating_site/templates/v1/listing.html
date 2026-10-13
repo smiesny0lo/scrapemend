@@ -1,0 +1,25 @@
+{% extends "v1/base.html" %}
+{% block content %}
+<h1>Tender notices</h1>
+<p class="summary">Showing {{ first }}-{{ last }} of {{ total }} notices</p>
+<table class="notices">
+  <thead>
+    <tr><th>Title</th><th>Contracting authority</th><th>Deadline</th><th>Estimated value</th></tr>
+  </thead>
+  <tbody>
+  {% for notice in notices %}
+    <tr class="notice">
+      <td class="title"><a href="/notices/{{ notice.id }}">{{ notice.title }}</a></td>
+      <td class="authority">{{ notice.authority }}</td>
+      <td class="deadline">{{ notice.deadline | day }}</td>
+      <td class="value">{{ notice.value | money }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<ul class="pagination">
+  {% if page > 1 %}<li class="prev"><a href="/notices?page={{ page - 1 }}">Previous</a></li>{% endif %}
+  <li class="current">Page {{ page }} of {{ pages }}</li>
+  {% if page < pages %}<li class="next"><a href="/notices?page={{ page + 1 }}">Next</a></li>{% endif %}
+</ul>
+{% endblock %}

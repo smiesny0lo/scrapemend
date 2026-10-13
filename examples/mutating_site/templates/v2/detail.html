@@ -1,0 +1,26 @@
+{% extends "v2/base.html" %}
+{% block title %}{{ notice.title }}{% endblock %}
+{% block content %}
+<div class="tender">
+  <div class="tender__header">
+    <h1 class="tender__title"><span class="tender__title-text">{{ notice.title }}</span></h1>
+  </div>
+  <div class="tender__body">
+    <dl class="tender__meta">
+      <div class="meta-row"><dt>Reference</dt><dd class="tender__ref"><span>{{ notice.id }}</span></dd></div>
+      <div class="meta-row"><dt>Contracting authority</dt><dd class="tender__buyer"><span>{{ notice.authority }}</span></dd></div>
+      <div class="meta-row"><dt>Category</dt><dd class="tender__category"><span>{{ notice.category }}</span></dd></div>
+      <div class="meta-row"><dt>Location</dt><dd class="tender__location"><span>{{ notice.location }}</span></dd></div>
+      <div class="meta-row"><dt>Published</dt><dd class="tender__published"><span>{{ notice.published | day }}</span></dd></div>
+      <div class="meta-row"><dt>Deadline</dt><dd class="tender__closing"><span>{{ notice.deadline | day }}</span></dd></div>
+      <div class="meta-row"><dt>Estimated value</dt><dd class="tender__amount"><span>{{ notice.value | money }}</span></dd></div>
+      <div class="meta-row"><dt>Status</dt><dd class="tender__status"><span>{{ notice.status }}</span></dd></div>
+    </dl>
+    <div class="tender__description">
+      <h2>Description</h2>
+      <div class="rich-text"><p>{{ notice.description }}</p></div>
+    </div>
+  </div>
+</div>
+<p><a href="/notices">Back to all notices</a></p>
+{% endblock %}

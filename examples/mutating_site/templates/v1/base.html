@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}Tender notices{% endblock %} | Demo Procurement Portal</title>
+  <style>
+    body { font-family: Georgia, serif; margin: 2rem; color: #222; }
+    table.notices { border-collapse: collapse; width: 100%; }
+    table.notices th, table.notices td { border: 1px solid #bbb; padding: 0.4rem 0.6rem; text-align: left; }
+    ul.pagination { list-style: none; padding: 0; display: flex; gap: 1rem; }
+    dl.notice-fields dt { font-weight: bold; margin-top: 0.5rem; }
+    dl.notice-fields dd { margin-left: 0; }
+  </style>
+</head>
+<body>
+  <header id="site-header"><a href="/notices">Demo Procurement Portal</a></header>
+  <main id="content">
+{% block content %}{% endblock %}
+  </main>
+  <footer id="site-footer">All notices on this site are synthetic demo data.</footer>
+</body>
+</html>

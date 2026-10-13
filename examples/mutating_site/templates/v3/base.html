@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Tender notices{% endblock %} · Demo Procurement Portal</title>
+  <style>
+    /* Utility classes in the style of CSS frameworks: they describe looks, not meaning. */
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Helvetica Neue", Arial, sans-serif; background: #f8fafc; color: #0f172a; }
+    a { color: #0f766e; }
+    .mx-auto { margin-left: auto; margin-right: auto; }
+    .ml-auto { margin-left: auto; }
+    .max-w-5xl { max-width: 64rem; }
+    .max-w-3xl { max-width: 48rem; }
+    .p-4 { padding: 1rem; }
+    .p-6 { padding: 1.5rem; }
+    .px-3 { padding-left: 0.75rem; padding-right: 0.75rem; }
+    .py-3 { padding-top: 0.75rem; padding-bottom: 0.75rem; }
+    .pt-4 { padding-top: 1rem; }
+    .mt-1 { margin-top: 0.25rem; }
+    .mt-2 { margin-top: 0.5rem; }
+    .mt-4 { margin-top: 1rem; }
+    .mt-6 { margin-top: 1.5rem; }
+    .flex { display: flex; }
+    .items-center { align-items: center; }
+    .grid { display: grid; }
+    .cols-auto { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
+    .gap-2 { gap: 0.5rem; }
+    .gap-4 { gap: 1rem; }
+    .rounded-lg { border-radius: 0.5rem; }
+    .border { border: 1px solid #e2e8f0; }
+    .border-t { border-top: 1px solid #e2e8f0; }
+    .bg-white { background: #fff; }
+    .bg-slate-50 { background: #f1f5f9; }
+    .shadow-sm { box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06); }
+    .text-xs { font-size: 0.75rem; }
+    .text-sm { font-size: 0.875rem; }
+    .text-lg { font-size: 1.125rem; }
+    .text-2xl { font-size: 1.5rem; }
+    .uppercase { text-transform: uppercase; letter-spacing: 0.05em; }
+    .text-slate-500 { color: #64748b; }
+    .font-semibold { font-weight: 600; }
+    .font-bold { font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="bg-white border">
+    <div class="mx-auto max-w-5xl px-3 py-3 flex items-center">
+      <a class="font-bold" href="/notices">Demo Procurement Portal</a>
+    </div>
+  </div>
+  <div class="mx-auto max-w-5xl p-6">
+{% block content %}{% endblock %}
+  </div>
+  <div class="mx-auto max-w-5xl p-6 text-xs text-slate-500">All notices on this site are synthetic demo data.</div>
+</body>
+</html>

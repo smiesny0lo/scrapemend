@@ -1,0 +1,19 @@
+{% extends "v3/base.html" %}
+{% block title %}{{ notice.title }}{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-3xl">
+  <div class="text-sm text-slate-500">{{ notice.category }} · {{ notice.location }}</div>
+  <h2 class="mt-1 text-2xl font-bold">{{ notice.title }}</h2>
+  <div class="mt-1 text-sm text-slate-500">Ref. {{ notice.id }} · Published {{ notice.published | day }} · Status: {{ notice.status }}</div>
+  <div class="mt-6 rounded-lg bg-slate-50 p-4">
+    <p class="text-lg">Deadline <strong>{{ notice.deadline | day }}</strong></p>
+    <p class="mt-2">Estimated value: {{ notice.value | money }}</p>
+  </div>
+  <div class="mt-6"><p>{{ notice.description }}</p></div>
+  <div class="mt-6 border-t pt-4">
+    <div class="text-xs uppercase text-slate-500">Contracting authority</div>
+    <div class="mt-1 font-semibold">{{ notice.authority }}</div>
+  </div>
+  <p class="mt-6"><a href="/notices">&larr; All notices</a></p>
+</div>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "v1/base.html" %}
+{% block title %}{{ notice.title }}{% endblock %}
+{% block content %}
+<article class="notice-detail">
+  <h1 class="notice-title">{{ notice.title }}</h1>
+  <dl class="notice-fields">
+    <dt>Reference</dt><dd class="reference">{{ notice.id }}</dd>
+    <dt>Contracting authority</dt><dd class="authority">{{ notice.authority }}</dd>
+    <dt>Category</dt><dd class="category">{{ notice.category }}</dd>
+    <dt>Location</dt><dd class="location">{{ notice.location }}</dd>
+    <dt>Published</dt><dd class="published">{{ notice.published | day }}</dd>
+    <dt>Deadline</dt><dd class="deadline">{{ notice.deadline | day }}</dd>
+    <dt>Estimated value</dt><dd class="value">{{ notice.value | money }}</dd>
+    <dt>Status</dt><dd class="status">{{ notice.status }}</dd>
+  </dl>
+  <section class="description">
+    <h2>Description</h2>
+    <p>{{ notice.description }}</p>
+  </section>
+</article>
+<p><a href="/notices">Back to all notices</a></p>
+{% endblock %}
