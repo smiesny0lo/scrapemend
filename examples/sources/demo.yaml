@@ -4,11 +4,13 @@ id: tenders-demo
 version: 1
 
 fetch:
-  start: http://localhost:8000/notices
+  # 127.0.0.1, not localhost: on Windows, localhost tries IPv6 first and the demo
+  # server only listens on IPv4, which costs ~2 s per new connection.
+  start: http://127.0.0.1:8000/notices
   paginate:
     next: { css: "li.next a::attr(href)" }
     max_pages: 20
-  rate: { rps: 5 }  # a local demo site; real sites deserve 1 or less
+  rate: { rps: 20 }  # a local demo site; real sites deserve 1 or less
 
 item:
   container: { css: "table.notices tr.notice" }

@@ -22,6 +22,15 @@ pip install -e ".[demo]"
 python -m examples.mutating_site --layout 1 --chaos off
 ```
 
+In a second terminal, scrape it with the demo spec:
+
+```sh
+scrapemend validate examples/sources/demo.yaml
+scrapemend run examples/sources/demo.yaml --out records.jsonl
+```
+
+Records are written as JSON lines; a summary (pages, records, failures, fallback strategies used) goes to stderr. Every downloaded page is kept under `snapshots/` so it can be re-parsed later without fetching it again.
+
 ## Development
 
 Requires Python 3.13+.
