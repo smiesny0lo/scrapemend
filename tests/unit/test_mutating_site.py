@@ -2,9 +2,9 @@ import math
 import re
 from collections.abc import Iterator
 
+import lxml.html
 import pytest
 from fastapi.testclient import TestClient
-from selectolax.lexbor import LexborHTMLParser
 
 from examples.mutating_site.app import LAYOUTS, PAGE_SIZE, create_app
 from examples.mutating_site.records import (
@@ -21,9 +21,9 @@ DETAIL_LINK = re.compile(r'href="/notices/(TN-\d{4}-\d{4})"')
 
 
 def page_text(html: str) -> str:
-    body = LexborHTMLParser(html).body
+    body = lxml.html.document_fromstring(html).find("body")
     assert body is not None
-    return " ".join(body.text(separator=" ").split())
+    return " ".join(" ".join(str(t) for t in body.itertext()).split())
 
 
 def detail_values(n: Notice) -> list[str]:

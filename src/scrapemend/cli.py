@@ -1,10 +1,12 @@
 """Command-line interface. Commands (run / check / heal / diff / promote) land in later phases."""
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from scrapemend import __version__
+from scrapemend.spec import SpecError, load_spec
 
 app = typer.Typer(
     name="scrapemend",
@@ -39,3 +41,17 @@ def main(
 def version() -> None:
     """Show the version."""
     typer.echo(f"scrapemend {__version__}")
+
+
+@app.command()
+def validate(
+    spec: Annotated[Path, typer.Argument(help="Path to a source spec YAML file.")],
+) -> None:
+    """Check a spec file and report every problem with its line number."""
+    try:
+        source = load_spec(spec)
+    except SpecError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from None
+    fields = ", ".join(source.fields)
+    typer.echo(f"{spec}: ok ({source.id} v{source.version}, {len(source.fields)} fields: {fields})")

@@ -1,0 +1,76 @@
+# Spec for the mutating demo site (examples/mutating_site), written against layout v1.
+# Start the site first:  python -m examples.mutating_site
+id: tenders-demo
+version: 1
+
+fetch:
+  start: http://localhost:8000/notices
+  paginate:
+    next: { css: "li.next a::attr(href)" }
+    max_pages: 20
+  rate: { rps: 5 }  # a local demo site; real sites deserve 1 or less
+
+item:
+  container: { css: "table.notices tr.notice" }
+  follow: { css: "td.title a::attr(href)" }
+  key: url  # URLs stay stable across redesigns, so anchors still match after a layout change
+
+# Read from each notice's detail page. Strategies are tried top to bottom.
+fields:
+  reference:
+    required: true
+    strategies:
+      - css: "dd.reference"
+      - label: Reference
+  title:
+    required: true
+    strategies:
+      - css: "h1.notice-title"
+  authority:
+    required: true
+    strategies:
+      - css: "dd.authority"
+      - label: Contracting authority
+  category:
+    strategies:
+      - css: "dd.category"
+  location:
+    strategies:
+      - css: "dd.location"
+  published:
+    type: date
+    date_format: "%d %b %Y"
+    strategies:
+      - css: "dd.published"
+  deadline:
+    type: date
+    required: true
+    date_format: "%d %b %Y"
+    strategies:
+      - css: "dd.deadline"
+      - label: Deadline
+  value:
+    type: decimal
+    volatile: true
+    normalize: [strip_currency]
+    null_values: ["Not disclosed"]
+    strategies:
+      - css: "dd.value"
+      - regex: 'Estimated value:?\s*(€\s?[\d,.]+)'
+  status:
+    volatile: true
+    strategies:
+      - css: "dd.status"
+  description:
+    normalize: [collapse_whitespace]
+    strategies:
+      - css: "section.description p"
+
+expect:
+  min_items_per_run: 200
+  max_null_rate:
+    value: 0.15  # about 8% of notices say "Not disclosed"
+
+heal:
+  mode: propose
+  anchors: 10

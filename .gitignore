@@ -19,8 +19,9 @@ htmlcov/
 .env.*
 !.env.example
 
-# Runtime data: never commit scraped content or run metadata
-snapshots/
+# Runtime data: never commit scraped content or run metadata.
+# Anchored to the repo root: src/scrapemend/snapshots/ is code and must be tracked.
+/snapshots/
 *.db
 *.sqlite
 *.sqlite3
