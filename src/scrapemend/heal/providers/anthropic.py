@@ -13,6 +13,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from scrapemend import DISTRIBUTION
 from scrapemend.heal.context import RepairContext
 from scrapemend.heal.providers.base import ProviderError
 from scrapemend.spec.patch import SpecPatch
@@ -223,7 +224,7 @@ class AnthropicProvider:
         except ImportError:
             raise ProviderError(
                 "the anthropic provider needs the anthropic package: "
-                "pip install 'scrapemend[anthropic]'"
+                f'pip install "{DISTRIBUTION}[anthropic]"'
             ) from None
         # The SDK adapts the schema to what structured outputs support.
         schema = anthropic.transform_schema(RepairOutput)

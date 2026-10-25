@@ -4,6 +4,8 @@ A repair provider looks at a broken spec and proposes a fix. Its answer is **dat
 
 ## Built-in providers
 
+<!-- The install hint below uses scrapemend.DISTRIBUTION; tests/unit/test_package.py checks it. -->
+
 | Provider | Use |
 |---|---|
 | `none` (default) | proposes nothing. Failures are detected and reported, and a human repairs the spec. scrapemend works fully offline. |

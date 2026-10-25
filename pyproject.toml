@@ -3,6 +3,8 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
+# TODO: choose a name that is free on PyPI ("scrapemend" is another project's there),
+# then change it here, in the dev extra below, and in DISTRIBUTION (src/scrapemend/__init__.py).
 name = "scrapemend"
 description = "A self-healing scraper engine: detect layout breakage, propose spec repairs, verify against known-good anchors."
 readme = "README.md"
