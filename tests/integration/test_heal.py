@@ -5,6 +5,7 @@ scrape succeeds; the same for v3. The LLM path runs the real AnthropicProvider
 against Claude's answers recorded from a live run (tests/fixtures/recorded).
 """
 
+import os
 import random
 import shutil
 from collections.abc import Iterator
@@ -188,7 +189,11 @@ def expected_records(base_url: str) -> dict[str, str]:
 
 
 @pytest.mark.parametrize("layout", [2, 3])
-def test_claude_heals_the_redesign_end_to_end(world: World, layout: int) -> None:
+def test_recorded_claude_answers_heal_the_redesign(world: World, layout: int) -> None:
+    """The real AnthropicProvider, request and all, answered by Claude's structured
+    answers recorded from a live run: no API call. It shows that those answers pass
+    today's gate and heal the site, not that Claude would answer the same again;
+    test_live_claude_heals_the_redesign checks that, when asked to."""
     world.layout(layout)
     failed = world.run()
     assert failed.status == "layout_changed"
@@ -211,6 +216,25 @@ def test_claude_heals_the_redesign_end_to_end(world: World, layout: int) -> None
     assert (healed.status, healed.spec_version, healed.summary.valid_records) == ("ok", 2, 200)
     assert titles == expected_records(world.site.base_url)
     assert world.events.kinds == ["run_failed", "repair_proposed", "run_recovered"]
+
+
+@pytest.mark.skipif(
+    os.environ.get("SCRAPEMEND_LIVE_ANTHROPIC") != "1",
+    reason="calls the Anthropic API: set SCRAPEMEND_LIVE_ANTHROPIC=1 and ANTHROPIC_API_KEY",
+)
+@pytest.mark.parametrize("layout", [2, 3])
+def test_live_claude_heals_the_redesign(world: World, layout: int) -> None:
+    """Claude, asked now, repairs the redesign through the gate (one or two API calls)."""
+    world.layout(layout)
+    assert world.run().status == "layout_changed"
+    outcome = world.heal(AnthropicProvider())
+    assert outcome.status == "proposed", outcome.message
+    accepted = next(p for p in outcome.proposals if p.status == "accepted")
+    world.promote(accepted)
+    titles: dict[str, str] = {}
+    healed = world.run(on_record=lambda r: titles.__setitem__(str(r.url), str(r.record["title"])))
+    assert (healed.status, healed.summary.valid_records) == ("ok", 200)
+    assert titles == expected_records(world.site.base_url)
 
 
 @pytest.mark.parametrize("layout", [2, 3])
