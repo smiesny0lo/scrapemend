@@ -1,0 +1,20 @@
+# Subtly wrong: deadline reads the publication date. Both are valid dates in the
+# same format, so nothing looks broken until the values are compared.
+rationale: v3 merged fields into text lines; regexes and labels.
+confidence: 0.8
+container: { css: "div.grid > div.rounded-lg" }
+follow: { css: "h3 a::attr(href)" }
+next_page: { css: "a[aria-label='Next page']::attr(href)" }
+fields:
+  reference: { strategies: [{ regex: 'Ref\.\s*(TN-\d{4}-\d{4})' }] }
+  title: { strategies: [{ css: "div.max-w-3xl > h2" }] }
+  authority: { strategies: [{ label: Contracting authority }] }
+  category:
+    strategies: [{ regex: '^(.+?) · ', within: { css: "div.max-w-3xl > div:first-child" } }]
+  location:
+    strategies: [{ regex: ' · (.+)$', within: { css: "div.max-w-3xl > div:first-child" } }]
+  published: { strategies: [{ regex: 'Published (\d{1,2} \w{3} \d{4})' }] }
+  deadline: { strategies: [{ regex: 'Published (\d{1,2} \w{3} \d{4})' }] }
+  value: { strategies: [{ regex: 'Estimated value:?\s*(€\s?[\d,.]+)' }] }
+  status: { strategies: [{ regex: 'Status:\s*(\w+)' }] }
+  description: { strategies: [{ xpath: "//div[@class='mt-6']/p" }] }

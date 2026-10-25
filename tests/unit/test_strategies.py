@@ -124,6 +124,20 @@ def test_regex(regex: str, expected: str | None) -> None:
     assert run({"regex": regex}, html) == expected
 
 
+@pytest.mark.parametrize(
+    ("within", "regex", "expected"),
+    [
+        ({"css": "div.meta"}, " · (.+)$", "Dunmere"),
+        ({"css": "div.meta"}, "^(.+?) · ", "Construction"),
+        ({"xpath": "//div[@class='meta']"}, " · (.+)$", "Dunmere"),
+        ({"css": "div.missing"}, "(.+)", None),
+    ],
+)
+def test_regex_within_an_element(within: dict[str, str], regex: str, expected: str | None) -> None:
+    html = "<p>Category · Location</p><div class='meta'>Construction · Dunmere</div>"
+    assert run({"regex": regex, "within": within}, html) == expected
+
+
 def test_regex_searches_visible_text_only() -> None:
     html = "<a href='/secret-123'>link</a><script>var id = 'secret-456';</script>"
     assert run({"regex": r"secret-\d+"}, html) is None

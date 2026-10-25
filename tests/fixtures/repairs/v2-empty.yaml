@@ -1,0 +1,8 @@
+# Empty: valid syntax, but the selectors match nothing on the new layout.
+rationale: Guessing at class names.
+confidence: 0.4
+container: { css: "table.notices-v2 tr.notice-row" }
+follow: { css: "td.notice-title a::attr(href)" }
+fields:
+  title: { strategies: [{ css: "h1.notice-heading" }] }
+  deadline: { strategies: [{ css: "dd.notice-deadline" }] }

@@ -28,7 +28,31 @@ CREATE TABLE IF NOT EXISTS baselines (
     run_id      TEXT NOT NULL,
     PRIMARY KEY (source_id, kind)
 );
+
+CREATE TABLE IF NOT EXISTS anchors (
+    source_id TEXT NOT NULL,
+    rank      INTEGER NOT NULL,      -- stable order: by hash of the key
+    key       TEXT NOT NULL,
+    anchor    TEXT NOT NULL,         -- the Anchor as JSON
+    PRIMARY KEY (source_id, key)
+);
 """
+
+
+class State:
+    """All local state of one database file."""
+
+    def __init__(self, path: str | Path) -> None:
+        from scrapemend.heal.anchors import AnchorStore
+        from scrapemend.runs import RunStore
+
+        self.path = path
+        self.db = connect(path)
+        self.runs = RunStore(self.db)
+        self.anchors = AnchorStore(self.db)
+
+    def close(self) -> None:
+        self.db.close()
 
 
 def connect(path: str | Path) -> sqlite3.Connection:

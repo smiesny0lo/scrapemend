@@ -10,10 +10,12 @@ from scrapemend.events import Event, EventKind, Notifier
 from scrapemend.extract import FieldResult
 from scrapemend.extract.select import find_link
 from scrapemend.fetch import Fetcher, FetchError
+from scrapemend.heal.anchors import Anchor, AnchorPicker, encode
 from scrapemend.pipeline import RunAborted, RunSummary, SourceRun, ValidatedRecord
 from scrapemend.runs import RunMode, RunReport, RunStore
 from scrapemend.snapshots import SnapshotStore
 from scrapemend.spec import SourceSpec
+from scrapemend.state import State
 from scrapemend.validate import validate_batch
 
 PROBE_PAGES = 3  # known detail pages re-checked when the listing yields nothing
@@ -25,7 +27,7 @@ def run_source(
     spec: SourceSpec,
     fetcher: Fetcher,
     snapshots: SnapshotStore,
-    runs: RunStore,
+    state: State,
     *,
     mode: RunMode = "run",
     limit: int | None = None,
@@ -36,17 +38,21 @@ def run_source(
     """Crawl a source and judge the result.
 
     Valid records are passed to `on_record` as they arrive (invalid ones too with
-    `keep_invalid`). Only a complete, good run of mode "run" becomes the new baseline.
+    `keep_invalid`). Only a complete, good run of mode "run" becomes the new baseline
+    and refreshes the source's anchors.
     """
+    runs = state.runs
     started = datetime.now(UTC)
     previous = runs.latest(spec.id)
     baseline_report = runs.last_good(spec.id)
     baseline = baseline_report.summary if baseline_report else None
 
     crawl = SourceRun(spec, fetcher, snapshots, limit=limit)
+    picker = AnchorPicker(spec.heal.anchors, spec.item.key, crawl.summary.run_id)
     error: BaseException | None = None
     try:
         for record in crawl.records():
+            picker.add(record)
             if on_record is not None and (record.valid or keep_invalid):
                 on_record(record)
     except (FetchError, RunAborted) as e:
@@ -63,8 +69,12 @@ def run_source(
         stopped_early = summary.listing_pages == 1 and (limit is None or summary.items < limit)
         if paginate and baseline and baseline.listing_pages > 1 and stopped_early:
             next_link_missing = find_link(paginate.next, crawl.first_listing) is None
-        if summary.items == 0 and baseline_report is not None:
-            diagnosis = _diagnose(crawl, snapshots, baseline_report)
+        if summary.items == 0:
+            known = state.anchors.all(spec.id)
+            if known:
+                diagnosis = _diagnose_anchors(crawl, known)
+            elif baseline_report is not None:
+                diagnosis = _diagnose(crawl, snapshots, baseline_report)
 
     # After the probes, so probed detail pages count as structural evidence too.
     structure = _structure(runs, spec.id, summary)
@@ -106,6 +116,7 @@ def run_source(
         for kind, prints in summary.fingerprints.items():
             if prints:
                 runs.set_baseline(spec.id, kind, prints[0], summary.run_id)
+        state.anchors.replace(spec.id, picker.anchors())
     if notifier is not None:
         _notify(notifier, report, previous)
     return report
@@ -138,8 +149,22 @@ def _diagnose(crawl: SourceRun, snapshots: SnapshotStore, baseline: RunReport) -
     return diagnose(crawl.spec, before, now)
 
 
+def _diagnose_anchors(crawl: SourceRun, anchors: list[Anchor]) -> Diagnosis | None:
+    """Re-check anchor pages, whose good values are known."""
+    known = [a for a in anchors if a.url][:PROBE_PAGES]
+    before: dict[str, FieldValues] = {
+        str(a.url): {name: (a.values[name], a.strategies.get(name)) for name in a.values}
+        for a in known
+    }
+    if not before:
+        return None
+    now = {url: _values(record.fields) for url, record in crawl.probe(before)}
+    return diagnose(crawl.spec, before, now)
+
+
 def _values(fields: Mapping[str, FieldResult]) -> FieldValues:
-    return {name: (f.value, f.strategy) for name, f in fields.items()}
+    # Encoded like anchor values, so values from either source compare equal.
+    return {name: (encode(f.value), f.strategy) for name, f in fields.items()}
 
 
 def _notify(notifier: Notifier, report: RunReport, previous: RunReport | None) -> None:

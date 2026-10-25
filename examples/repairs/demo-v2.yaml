@@ -1,0 +1,34 @@
+# A hand-written repair of examples/sources/demo.yaml for demo layout v2.
+# Use it without an LLM:  scrapemend heal examples/sources/demo.yaml --patch examples/repairs/demo-v2.yaml
+rationale: >
+  Layout v2 renamed every class (tr.notice -> tr.tender-row, dd.deadline ->
+  dd.tender__closing, ...) and replaced the pager list with rel=next links. The page
+  structure is the same, so new CSS selectors restore every field. Label fallbacks
+  are kept, because the dt/dd labels survived the redesign.
+confidence: 0.9
+container: { css: "table.tender-table tr.tender-row" }
+follow: { css: "a.tender-link::attr(href)" }
+next_page: { css: "a[rel=next]::attr(href)" }
+fields:
+  reference:
+    strategies: [{ css: "dd.tender__ref" }, { label: Reference }]
+  title:
+    strategies: [{ css: "h1.tender__title" }]
+  authority:
+    strategies: [{ css: "dd.tender__buyer" }, { label: Contracting authority }]
+  category:
+    strategies: [{ css: "dd.tender__category" }, { label: Category }]
+  location:
+    strategies: [{ css: "dd.tender__location" }, { label: Location }]
+  published:
+    strategies: [{ css: "dd.tender__published" }, { label: Published }]
+  deadline:
+    strategies: [{ css: "dd.tender__closing" }, { label: Deadline }]
+  value:
+    strategies:
+      - css: "dd.tender__amount"
+      - regex: 'Estimated value:?\s*(€\s?[\d,.]+)'
+  status:
+    strategies: [{ css: "dd.tender__status" }, { label: Status }]
+  description:
+    strategies: [{ css: "div.tender__description p" }]

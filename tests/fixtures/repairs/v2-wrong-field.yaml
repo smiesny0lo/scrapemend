@@ -1,0 +1,18 @@
+# Subtly wrong: every selector works, but location reads the category element.
+# Each location still looks like a plausible text value; only the anchors can tell.
+rationale: v2 renamed classes; new selectors.
+confidence: 0.9
+container: { css: "table.tender-table tr.tender-row" }
+follow: { css: "a.tender-link::attr(href)" }
+next_page: { css: "a[rel=next]::attr(href)" }
+fields:
+  reference: { strategies: [{ css: "dd.tender__ref" }] }
+  title: { strategies: [{ css: "h1.tender__title" }] }
+  authority: { strategies: [{ css: "dd.tender__buyer" }] }
+  category: { strategies: [{ css: "dd.tender__category" }] }
+  location: { strategies: [{ css: "dd.tender__category" }] }
+  published: { strategies: [{ css: "dd.tender__published" }] }
+  deadline: { strategies: [{ css: "dd.tender__closing" }] }
+  value: { strategies: [{ css: "dd.tender__amount" }] }
+  status: { strategies: [{ css: "dd.tender__status" }] }
+  description: { strategies: [{ css: "div.tender__description p" }] }

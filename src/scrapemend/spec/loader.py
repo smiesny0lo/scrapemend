@@ -1,4 +1,5 @@
-"""Load source specs from YAML, reporting every problem with its line and column."""
+"""Load source specs (and repair patches) from YAML, reporting every problem with its
+line and column."""
 
 import re
 from dataclasses import dataclass
@@ -6,10 +7,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from pydantic_core import ErrorDetails
 
 from scrapemend.spec.models import SourceSpec
+from scrapemend.spec.patch import SpecPatch
 
 Loc = tuple[int | str, ...]
 
@@ -54,16 +56,31 @@ _SpecLoader.add_implicit_resolver(
 
 
 def load_spec(path: str | Path) -> SourceSpec:
-    path = Path(path)
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as e:
-        problem = Problem(None, None, "", f"cannot read file: {e.strerror}")
-        raise SpecError(str(path), [problem]) from None
-    return parse_spec(text, source=str(path))
+    return parse_spec(_read(path), source=str(path))
 
 
 def parse_spec(text: str, source: str = "<string>") -> SourceSpec:
+    return _parse(text, source, SourceSpec)
+
+
+def load_patch(path: str | Path) -> SpecPatch:
+    """A repair written as YAML, with the same line-numbered errors as a spec file."""
+    return parse_patch(_read(path), source=str(path))
+
+
+def parse_patch(text: str, source: str = "<string>") -> SpecPatch:
+    return _parse(text, source, SpecPatch)
+
+
+def _read(path: str | Path) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError as e:
+        problem = Problem(None, None, "", f"cannot read file: {e.strerror}")
+        raise SpecError(str(path), [problem]) from None
+
+
+def _parse[M: BaseModel](text: str, source: str, model: type[M]) -> M:
     try:
         root = yaml.compose(text, Loader=_SpecLoader)
         data = yaml.load(text, Loader=_SpecLoader)
@@ -78,12 +95,12 @@ def parse_spec(text: str, source: str = "<string>") -> SourceSpec:
         raise SpecError(source, [Problem(1, 1, "", "spec must be a mapping of keys to values")])
     problems = _duplicate_keys(root)
     try:
-        spec = SourceSpec.model_validate(data)
+        parsed = model.model_validate(data)
     except ValidationError as e:
         problems += [_problem(root, err) for err in _relevant(e.errors())]
     if problems:
         raise SpecError(source, sorted(problems, key=lambda p: (p.line or 0, p.column or 0)))
-    return spec
+    return parsed
 
 
 def _duplicate_keys(node: yaml.Node, path: str = "") -> list[Problem]:

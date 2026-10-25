@@ -1,6 +1,13 @@
 """Source spec models, YAML loading, and version history."""
 
-from scrapemend.spec.loader import Problem, SpecError, load_spec, parse_spec
+from scrapemend.spec.loader import (
+    Problem,
+    SpecError,
+    load_patch,
+    load_spec,
+    parse_patch,
+    parse_spec,
+)
 from scrapemend.spec.models import (
     CssSpec,
     FieldSpec,
@@ -23,6 +30,8 @@ __all__ = [
     "SpecError",
     "StrategySpec",
     "XPathSpec",
+    "load_patch",
     "load_spec",
+    "parse_patch",
     "parse_spec",
 ]

@@ -101,6 +101,7 @@ class RunSummary(BaseModel):
 class ValidatedRecord:
     result: RecordResult
     violations: tuple[Violation, ...]
+    snapshot_id: str | None = None  # the stored page the record was read from
 
     @property
     def url(self) -> str | None:
@@ -134,6 +135,7 @@ def tally(
 class Page:
     snapshot: Snapshot
     doc: Document
+    snapshot_id: str
 
 
 class SourceRun:
@@ -202,11 +204,13 @@ class SourceRun:
             except FetchError:
                 continue
             if page.snapshot.status == 200:
-                found.append((url, self.validate(self.extractor.extract(page.doc))))
+                record = self.validate(self.extractor.extract(page.doc), page.snapshot_id)
+                found.append((url, record))
         return found
 
-    def validate(self, result: RecordResult) -> ValidatedRecord:
-        return ValidatedRecord(result, tuple(validate_record(result, self.spec.fields)))
+    def validate(self, result: RecordResult, snapshot_id: str | None = None) -> ValidatedRecord:
+        violations = tuple(validate_record(result, self.spec.fields))
+        return ValidatedRecord(result, violations, snapshot_id)
 
     def _item(self, item: Document) -> ValidatedRecord | None:
         follow = self.spec.item.follow
@@ -229,7 +233,7 @@ class SourceRun:
             self._fail(ItemFailure(url=link, reason=f"HTTP {status}", status=status))
             return None
         self._failure_streak = 0
-        return self.validate(self.extractor.extract(detail.doc))
+        return self.validate(self.extractor.extract(detail.doc), detail.snapshot_id)
 
     def _fetch(self, url: str, kind: SnapshotKind) -> Page:
         response = self.fetcher.fetch(url)
@@ -249,8 +253,7 @@ class SourceRun:
             kept = self.summary.fingerprints.setdefault(kind, [])
             if len(kept) < FINGERPRINTS_PER_KIND and snapshot.fingerprint:
                 kept.append(snapshot.fingerprint)
-        self.store.put(snapshot)
-        return Page(snapshot, doc)
+        return Page(snapshot, doc, self.store.put(snapshot))
 
     def _fail(self, failure: ItemFailure) -> None:
         self.summary.failures.append(failure)

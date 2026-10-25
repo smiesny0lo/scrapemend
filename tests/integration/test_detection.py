@@ -25,7 +25,7 @@ from scrapemend.runner import run_source
 from scrapemend.runs import RunMode, RunReport, RunStore
 from scrapemend.snapshots import FilesystemSnapshotStore
 from scrapemend.spec import SourceSpec, load_spec
-from scrapemend.state import connect
+from scrapemend.state import State
 from tests.support import FakeClock, serve
 
 pytestmark = pytest.mark.integration
@@ -48,7 +48,7 @@ class Demo:
     app: FastAPI
     base_url: str
     clock: FakeClock
-    runs: RunStore
+    state: State
     snapshots: FilesystemSnapshotStore
     db: Path
     snapshot_dir: Path
@@ -80,12 +80,16 @@ class Demo:
             spec,
             fetcher,
             self.snapshots,
-            self.runs,
+            self.state,
             mode=mode,
             limit=limit,
             on_record=records.append if records is not None else None,
             notifier=self.events,
         )
+
+    @property
+    def runs(self) -> RunStore:
+        return self.state.runs
 
     def chaos(self, modes: str, failure_rate: float = 0.2) -> None:
         self.app.state.chaos = Chaos(parse_modes(modes), failure_rate, clock=self.clock)
@@ -102,7 +106,7 @@ def demo(tmp_path: Path) -> Iterator[Demo]:
             app=app,
             base_url=base_url,
             clock=clock,
-            runs=RunStore(connect(db)),
+            state=State(db),
             snapshots=FilesystemSnapshotStore(tmp_path / "snapshots"),
             db=db,
             snapshot_dir=tmp_path / "snapshots",

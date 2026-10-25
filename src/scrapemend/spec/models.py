@@ -75,9 +75,11 @@ class XPathSpec(_Model):
 
 class RegexSpec(_Model):
     """A regular expression over the text. The first capture group is the value if
-    the pattern has one, otherwise the whole match."""
+    the pattern has one, otherwise the whole match. With `within`, only the text of
+    the first element that selector matches is searched (`Construction · Dunmere`)."""
 
     regex: str = Field(min_length=1)
+    within: CssSpec | XPathSpec | None = None
 
     @field_validator("regex")
     @classmethod

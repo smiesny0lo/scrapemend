@@ -1,0 +1,37 @@
+# A hand-written repair of examples/sources/demo.yaml for demo layout v3.
+# Use it without an LLM:  scrapemend heal examples/sources/demo.yaml --patch examples/repairs/demo-v3.yaml
+rationale: >
+  Layout v3 is a redesign: a card grid instead of a table, utility classes that say
+  nothing about content, and several fields merged into lines of text. Selectors
+  now anchor on structure (the content column, the h2 title), and merged fields are
+  read with regexes: "Ref. TN-... · Published ... · Status: ...", and
+  "Category · Location" inside its own element.
+confidence: 0.8
+container: { css: "div.grid > div.rounded-lg" }
+follow: { css: "h3 a::attr(href)" }
+next_page: { css: "a[aria-label='Next page']::attr(href)" }
+fields:
+  reference:
+    strategies: [{ regex: 'Ref\.\s*(TN-\d{4}-\d{4})' }]
+  title:
+    strategies: [{ css: "div.max-w-3xl > h2" }]
+  authority:
+    strategies: [{ label: Contracting authority }]
+  category:
+    strategies:
+      - regex: '^(.+?) · '
+        within: { css: "div.max-w-3xl > div:first-child" }
+  location:
+    strategies:
+      - regex: ' · (.+)$'
+        within: { css: "div.max-w-3xl > div:first-child" }
+  published:
+    strategies: [{ regex: 'Published (\d{1,2} \w{3} \d{4})' }]
+  deadline:
+    strategies: [{ label: { text: Deadline, relation: after } }]
+  value:
+    strategies: [{ regex: 'Estimated value:?\s*(€\s?[\d,.]+)' }]
+  status:
+    strategies: [{ regex: 'Status:\s*(\w+)' }]
+  description:
+    strategies: [{ xpath: "//div[@class='mt-6']/p" }]

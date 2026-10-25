@@ -18,10 +18,10 @@ from scrapemend.events import LogNotifier, Notifier, Notifiers, StreamNotifier
 from scrapemend.fetch import DEFAULT_USER_AGENT, HttpFetcher
 from scrapemend.pipeline import ValidatedRecord
 from scrapemend.runner import run_source
-from scrapemend.runs import RunMode, RunReport, RunStore
+from scrapemend.runs import RunMode, RunReport
 from scrapemend.snapshots import FilesystemSnapshotStore
 from scrapemend.spec import SourceSpec, SpecError, load_spec
-from scrapemend.state import connect
+from scrapemend.state import State
 
 app = typer.Typer(
     name="scrapemend",
@@ -184,7 +184,7 @@ def runs(
     db: DbOption = DEFAULT_DB,
 ) -> None:
     """List recent runs, newest first."""
-    reports = RunStore(connect(db)).recent(source_id, limit=limit)
+    reports = State(db).runs.recent(source_id, limit=limit)
     if not reports:
         typer.echo("no runs yet")
         return
@@ -221,7 +221,7 @@ def _execute(
                 source,
                 fetcher,
                 store,
-                RunStore(connect(db)),
+                State(db),
                 mode=mode,
                 limit=limit,
                 keep_invalid=keep_invalid,
