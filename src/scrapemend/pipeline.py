@@ -86,11 +86,17 @@ class FieldStats(BaseModel):
             self.winners[field.strategy] = self.winners.get(field.strategy, 0) + 1
 
 
+class ListingPage(BaseModel):
+    url: str
+    items: int  # items the container matched on it
+
+
 class RunSummary(BaseModel):
     source_id: str
     spec_version: int
     run_id: str
     listing_pages: int = 0
+    listings: list[ListingPage] = Field(default_factory=list)  # in crawl order
     items: int = 0
     records: int = 0  # extracted, valid or not
     invalid_records: int = 0
@@ -191,7 +197,9 @@ class SourceRun:
             if self.first_listing is None:
                 self.first_listing = listing.doc
 
-            for item in select_all(self.spec.item.container, listing.doc):
+            items = select_all(self.spec.item.container, listing.doc)
+            self.summary.listings.append(ListingPage(url=listing.snapshot.url, items=len(items)))
+            for item in items:
                 if self.limit is not None and self.summary.items >= self.limit:
                     return
                 self.summary.items += 1

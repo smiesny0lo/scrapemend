@@ -1,6 +1,6 @@
 """Pages under the current layout, for diagnosing and verifying repairs."""
 
-from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Protocol
 
 from scrapemend.extract import Document
@@ -8,13 +8,19 @@ from scrapemend.fetch import BlockedError, Fetcher, FetchError
 from scrapemend.snapshots import Snapshot, SnapshotKind, SnapshotStore
 
 
+@dataclass(frozen=True)
+class PageFailure:
+    """Why a page didn't load."""
+
+    reason: str  # e.g. "HTTP 404", "HTTP 503 after 4 attempts"
+    # True: the page couldn't be fetched (timeouts, 5xx, no network), so nothing is
+    # known about it. False: the site answered that it isn't there (404, 410, ...).
+    unreachable: bool
+
+
 class Pages(Protocol):
     def listing_pages(self) -> list[Document]:
         """The listing pages the failed run stored, its first page first."""
-        ...
-
-    def detail_pages(self) -> Iterator[Document]:
-        """The detail pages the failed run stored, one at a time: never fetched."""
         ...
 
     def listing(self, url: str) -> Document | None:
@@ -25,11 +31,18 @@ class Pages(Protocol):
         """A detail page by URL, or None if it doesn't load."""
         ...
 
+    def failure(self, url: str) -> PageFailure | None:
+        """Why a page that was asked for didn't load; None if it loaded."""
+        ...
+
 
 class PageSource:
     """The pages a run stored, plus live fetches (politely, through the given fetcher)
     of pages it didn't fetch. Live pages are stored as snapshots of the same run, so
-    a verification can be reproduced later without fetching again."""
+    a verification can be reproduced later without fetching again.
+
+    A page that fails to load isn't asked for again by the same source: a new
+    PageSource tries it again."""
 
     def __init__(
         self,
@@ -48,7 +61,8 @@ class PageSource:
         self.fetched = 0  # live fetches made
         self._listings: list[str] = []
         self._stored: dict[tuple[SnapshotKind, str], str] = {}  # (kind, url) -> snapshot id
-        self._docs: dict[tuple[SnapshotKind, str], Document | None] = {}
+        self._listing_docs: dict[str, Document] = {}  # a crawl's few listing pages, parsed
+        self._failures: dict[str, PageFailure] = {}
         for snapshot_id in snapshots.snapshots(source_id, run_id):
             snapshot = snapshots.get(snapshot_id)
             if snapshot.status != 200:
@@ -56,43 +70,43 @@ class PageSource:
             if snapshot.kind == "listing":
                 self._listings.append(snapshot_id)
             self._stored.setdefault((snapshot.kind, snapshot.url), snapshot_id)
-        self._details = [i for (kind, _), i in self._stored.items() if kind == "detail"]
 
     def listing_pages(self) -> list[Document]:
         """The listing pages stored for the run when this source was made, in the
         order they were fetched: the run's own, then any an earlier verification added."""
         return [self.snapshots.get(i).document() for i in self._listings]
 
-    def detail_pages(self) -> Iterator[Document]:
-        """The detail pages stored for the run when this source was made, one per URL,
-        in the order they were fetched, parsed one at a time: a run may have stored
-        thousands."""
-        for snapshot_id in self._details:
-            yield self.snapshots.get(snapshot_id).document()
-
     def listing(self, url: str) -> Document | None:
         """A listing page: stored if the run has it, else fetched now; None if it fails."""
-        return self._get("listing", url)
+        if url not in self._listing_docs:
+            doc = self._load("listing", url)
+            if doc is None:
+                return None
+            self._listing_docs[url] = doc
+        return self._listing_docs[url]
 
     def page(self, url: str) -> Document | None:
-        """A detail page: stored if the run has it, else fetched now; None if it fails."""
-        return self._get("detail", url)
+        """A detail page: stored if the run has it, else fetched now; None if it fails.
+        Parsed again on every call, so a crawl of thousands of pages keeps none."""
+        return self._load("detail", url)
 
-    def _get(self, kind: SnapshotKind, url: str) -> Document | None:
-        if (kind, url) not in self._docs:
-            self._docs[kind, url] = self._load(kind, url)
-        return self._docs[kind, url]
+    def failure(self, url: str) -> PageFailure | None:
+        return self._failures.get(url)
 
     def _load(self, kind: SnapshotKind, url: str) -> Document | None:
+        if url in self._failures:
+            return None
         if (kind, url) in self._stored:
             return self.snapshots.get(self._stored[kind, url]).document()
         if self.fetcher is None:
+            self._failures[url] = PageFailure("not stored, and no fetcher", unreachable=True)
             return None
         try:
             response = self.fetcher.fetch(url)
         except BlockedError:
             raise
-        except FetchError:
+        except FetchError as e:
+            self._failures[url] = PageFailure(e.reason, unreachable=True)
             return None
         self.fetched += 1
         snapshot = Snapshot(
@@ -105,5 +119,9 @@ class PageSource:
             headers=response.headers,
             body=response.body,
         )
-        self._stored[kind, url] = self.snapshots.put(snapshot)
-        return snapshot.document() if response.status == 200 else None
+        snapshot_id = self.snapshots.put(snapshot)
+        if response.status != 200:
+            self._failures[url] = PageFailure(f"HTTP {response.status}", unreachable=False)
+            return None
+        self._stored[kind, url] = snapshot_id
+        return snapshot.document()

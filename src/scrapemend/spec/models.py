@@ -252,11 +252,18 @@ class HealSpec(_Model):
     mode: Literal["off", "propose", "auto"] = "propose"
     anchors: int = Field(default=10, ge=0)  # known-good records kept for verification
     # Share of anchor values every stable field must reproduce for a repair to be
-    # accepted. Anchor pages that fail to load don't count, but at least three must
-    # load (or all, if there are fewer).
+    # accepted, and of the shadow run's records known from the last good run. Anchor
+    # pages that fail to load don't count, but at least three must load (or all, if
+    # there are fewer).
     threshold: float = Field(default=1.0, gt=0, le=1)
     # The same for volatile fields, whose values may have changed since: most must not.
     volatile_match: float = Field(default=0.6, ge=0, le=1)
+    # The shadow run: the share of records a volatile field's value may have changed
+    # on since the last good run. A value that became empty never counts as a change.
+    volatile_change: float = Field(default=0.1, ge=0, le=1)
+    # None: the shadow run reads the whole source. A number caps the records it reads,
+    # drawn at random (with a fixed seed) from listing pages across the whole source.
+    shadow_max_items: int | None = Field(default=None, ge=20)
 
 
 # --- source ---------------------------------------------------------------------------

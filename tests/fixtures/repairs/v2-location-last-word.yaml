@@ -1,0 +1,56 @@
+# Review attack S3b on layout v2: the correct repair, except that location is the
+# last word of the title. That is right for every place but Fenwick Vale: 12 of 200
+# notices read 'Vale'. (v3-location-last-word.yaml is the same bug on layout v3.)
+rationale: 'Layout v2 renamed every class (tr.notice -> tr.tender-row, dd.deadline
+  -> dd.tender__closing, ...) and replaced the pager list with rel=next links. The
+  page structure is the same, so new CSS selectors restore every field. Label fallbacks
+  are kept, because the dt/dd labels survived the redesign.
+
+  '
+confidence: 0.9
+container:
+  css: table.tender-table tr.tender-row
+follow:
+  css: a.tender-link::attr(href)
+next_page:
+  css: a[rel=next]::attr(href)
+fields:
+  reference:
+    strategies:
+    - css: dd.tender__ref
+    - label: Reference
+  title:
+    strategies:
+    - css: h1.tender__title
+  authority:
+    strategies:
+    - css: dd.tender__buyer
+    - label: Contracting authority
+  category:
+    strategies:
+    - css: dd.tender__category
+    - label: Category
+  location:
+    strategies:
+    - regex: (\w+)$
+      within:
+        css: h1.tender__title
+  published:
+    strategies:
+    - css: dd.tender__published
+    - label: Published
+  deadline:
+    strategies:
+    - css: dd.tender__closing
+    - label: Deadline
+  value:
+    strategies:
+    - css: dd.tender__amount
+    - regex: Estimated value:?\s*(€\s?[\d,.]+)
+  status:
+    strategies:
+    - css: dd.tender__status
+    - label: Status
+  description:
+    strategies:
+    - css: div.tender__description p

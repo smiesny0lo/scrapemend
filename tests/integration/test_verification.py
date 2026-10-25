@@ -14,6 +14,7 @@ import pytest
 from fastapi import FastAPI
 
 from examples.mutating_site.app import create_app
+from examples.mutating_site.records import Notice, generate_notices
 from scrapemend.extract import Extractor
 from scrapemend.fetch import HttpFetcher
 from scrapemend.heal.anchors import Anchor, AnchorValue, split
@@ -166,6 +167,12 @@ def test_correct_repair_is_accepted(broken: Broken) -> None:
     assert report.score == 1.0
     assert (report.anchors_checked, report.sample, report.listing_items) == (10, 10, 20)
     assert report.listing_pages == 3  # the first, and two along the next-page link
+    # The shadow run crawled the source and compared every record with the last good run.
+    shadow = report.shadow
+    assert shadow is not None
+    assert (shadow.scope, shadow.listing_pages, shadow.items) == ("full", 10, 200)
+    assert (shadow.records, shadow.compared) == (200, 200)
+    assert {f.matched for f in shadow.fields.values()} == {200}
 
 
 def test_unrepaired_spec_is_rejected(broken: Broken) -> None:
@@ -257,8 +264,10 @@ def test_a_field_wrong_on_a_few_records_is_rejected_whatever_the_anchors(
         missed += all(a.values["location"] != "Fenwick Vale" for a in anchors)
         report = broken.check(patch, anchors, crawled)
         assert not report.accepted, seed
-        assert report.run_records == 200
-        assert report.run_fields["location"].matched == 188
+        if report.shadow is None:  # an anchor had Fenwick Vale: rejected before the crawl
+            continue
+        assert report.shadow.compared == 200
+        assert report.shadow.fields["location"].matched == 188
         assert (
             "location reproduces 188/200 values of the last good run (needs 100%); "
             "expected 'Fenwick Vale', got 'Vale'"
@@ -270,23 +279,137 @@ def test_a_field_wrong_on_a_few_records_is_rejected_whatever_the_anchors(
 def test_correct_repair_reproduces_every_stored_record(broken: Broken, crawled: PageSource) -> None:
     report = broken.check(load_patch(REPAIRS / f"demo-v{layout(broken)}.yaml"), pages=crawled)
     assert report.accepted, report.problems
-    assert (report.run_records, report.anchors_checked, report.sample) == (200, 10, 10)
-    assert {check.rate for check in report.run_fields.values()} == {1.0}
+    assert report.shadow is not None
+    assert (report.shadow.compared, report.anchors_checked, report.sample) == (200, 10, 10)
+    assert {f.matched for f in report.shadow.fields.values()} == {200}
     assert report.notes == []
 
 
-def test_without_stored_detail_pages_only_anchors_are_compared(broken: Broken) -> None:
-    # The v1 item container matches nothing on the new listing, so the failed run
-    # reached no detail pages: it stored only the three anchor pages it probed. A
-    # field wrong only on records outside the anchors passes here: see
-    # docs/verification.md, "What the gate can and can't catch".
+def test_without_stored_detail_pages_the_shadow_run_fetches_them(broken: Broken) -> None:
+    # Replaces test_without_stored_detail_pages_only_anchors_are_compared, which showed
+    # the hole: the v1 item container matches nothing on the new listing, so the failed
+    # run stored only the three anchor pages it probed, and only the anchors' values
+    # were compared. The shadow run fetches the rest and compares every record.
     report = broken.check(load_patch(REPAIRS / f"demo-v{layout(broken)}.yaml"))
     assert report.accepted, report.problems
-    assert (report.run_records, report.run_fields) == (3, {})
-    assert report.notes == [
-        "only 3 records on the failed run's stored pages are known from the last good run "
-        "(needs 20), so known values were compared on the anchors only"
-    ]
+    assert report.shadow is not None
+    assert (report.shadow.records, report.shadow.compared) == (200, 200)
+    assert report.notes == []
+
+
+# Review attacks: each is the correct repair with one defect that is right on most
+# records. fixture -> (layout, the notices it reads right, the shadow run's problem)
+ATTACKS: dict[str, tuple[int, Callable[[Notice], bool], str]] = {
+    "v2-value-fitted-to-one-page.yaml": (  # A3
+        2,
+        lambda n: n.value is None or n.value < 100_000,
+        "value changed on 102 of 200 records since the last good run (needs at most 10% "
+        "for a volatile field)",
+    ),
+    "v2-value-drops-millions.yaml": (  # S1
+        2,
+        lambda n: n.value is None or n.value < 1_000_000,
+        "value changed on 29 of 200 records since the last good run (needs at most 10% "
+        "for a volatile field)",
+    ),
+    "v2-status-enumerates-examples.yaml": (  # S2
+        2,
+        lambda n: n.status != "Awarded",
+        "status became empty on 39 of 200 records that had a value in the last good run",
+    ),
+    "v2-location-last-word.yaml": (  # S3b
+        2,
+        lambda n: n.location != "Fenwick Vale",
+        "location reproduces 188/200 values of the last good run (needs 100%); "
+        "expected 'Fenwick Vale', got 'Vale'",
+    ),
+    "v3-location-last-word.yaml": (  # S3
+        3,
+        lambda n: n.location != "Fenwick Vale",
+        "location reproduces 188/200 values of the last good run (needs 100%); "
+        "expected 'Fenwick Vale', got 'Vale'",
+    ),
+}
+NOTICES = {n.id: n for n in generate_notices()}
+
+
+def test_review_attacks_are_rejected_even_when_every_anchor_fits(broken: Broken) -> None:
+    # The worst case for the anchors: ten of them, all records the attack reads right,
+    # on the pages a real failure leaves (only three probed detail pages stored).
+    for fixture, (attack_layout, fits, problem) in ATTACKS.items():
+        if attack_layout != layout(broken):
+            continue
+        fitting = [url for url in sorted(broken.known) if fits(NOTICES[url.rsplit("/", 1)[1]])]
+        report = broken.check(load_patch(BAD / fixture), broken.anchors_for(fitting[:10]))
+        assert {check.rate for check in report.fields.values()} == {1.0}, fixture
+        assert not report.accepted, fixture
+        [found] = report.problems
+        assert found.startswith(problem), (fixture, found)
+
+
+def test_a_field_wrong_on_a_few_records_is_rejected_whatever_the_anchors_or_stored_pages(
+    broken: Broken,
+) -> None:
+    # Review attack S3/S3b, on the pages a real failure leaves: before the shadow run,
+    # 5 of these 10 draws (seeds 0, 1, 2, 6 and 8) passed.
+    patch = last_word(broken)
+    urls = sorted(broken.known)
+    for seed in range(10):
+        anchors = broken.anchors_for(random.Random(seed).sample(urls, 10))
+        report = broken.check(patch, anchors)
+        assert not report.accepted, seed
+        if any(a.values["location"] == "Fenwick Vale" for a in anchors):
+            assert re.match(r"location reproduces \d/10 anchor values", report.problems[0])
+        else:
+            assert report.problems == [
+                "location reproduces 188/200 values of the last good run (needs 100%); "
+                "expected 'Fenwick Vale', got 'Vale'"
+            ]
+
+
+def test_review_attacks_on_the_anchors_stay_rejected(broken: Broken) -> None:
+    # A1 (v2): published reads the deadline; A2 (v3): description reads another paragraph.
+    fixture, field = {
+        2: ("v2-published-reads-deadline.yaml", "published"),
+        3: ("v3-description-wrong-element.yaml", "description"),
+    }[layout(broken)]
+    report = broken.check(load_patch(BAD / fixture))
+    assert not report.accepted
+    assert report.problems[0].startswith(f"{field} reproduces 0/10 anchor values")
+
+
+SAMPLED_PAGES = [1, 3, 4, 5, 10]  # drawn with the shadow run's fixed seed
+
+
+def test_a_sampled_shadow_run_draws_from_the_whole_source(broken: Broken) -> None:
+    data = broken.spec.model_dump(mode="json")
+    data["heal"]["shadow_max_items"] = 50
+    sampled = SourceSpec.model_validate(data)
+
+    def check(fixture: Path, anchors: list[Anchor] = broken.anchors) -> VerificationReport:
+        candidate = load_patch(fixture).apply(sampled, version=2)
+        return verify(
+            candidate, anchors, broken.pages, baseline=broken.baseline, known=broken.known
+        )
+
+    report = check(REPAIRS / f"demo-v{layout(broken)}.yaml")
+    assert report.accepted, report.problems
+    shadow = report.shadow
+    assert shadow is not None
+    assert (shadow.scope, shadow.records, shadow.compared) == ("sample", 50, 50)
+    # ceil(2 * 50 / 20) = 5 of the last good run's 10 listing pages, drawn at random:
+    # not the first five, and the same ones every time.
+    start = str(broken.spec.fetch.start)
+    numbers = [1 if url == start else int(url.rsplit("=", 1)[1]) for url in shadow.sampled]
+    assert numbers == SAMPLED_PAGES
+    assert (shadow.listing_pages, shadow.items) == (5, 100)
+    assert check(REPAIRS / f"demo-v{layout(broken)}.yaml").shadow == shadow
+    if layout(broken) == 2:  # S2, with anchors it fits: every Awarded status empty
+        _, fits, _ = ATTACKS["v2-status-enumerates-examples.yaml"]
+        fitting = [url for url in sorted(broken.known) if fits(NOTICES[url.rsplit("/", 1)[1]])]
+        s2 = check(BAD / "v2-status-enumerates-examples.yaml", broken.anchors_for(fitting[:10]))
+        [problem] = s2.problems
+        assert problem.startswith("status became empty on ")
 
 
 def test_unloadable_anchor_pages_are_tolerated(broken: Broken) -> None:
@@ -334,24 +457,24 @@ def test_verification_reuses_pages_and_stores_the_ones_it_fetched(broken: Broken
         broken.snapshots, broken.spec.id, failed.run_id, fetcher=broken.new_fetcher()
     )
     good = load_patch(REPAIRS / f"demo-v{layout(broken)}.yaml").apply(broken.spec, version=2)
-    verify(good, broken.anchors, pages, baseline=broken.baseline)
-    # Listing pages 2 and 3, 7 anchor pages the failed run hadn't probed, 10 samples.
-    assert pages.fetched == 19
+    verify(good, broken.anchors, pages, baseline=broken.baseline, known=broken.known)
+    # Listing pages 2 to 10, and every detail page but the 3 the failed run had probed.
+    assert pages.fetched == 9 + 197
     wrong = load_patch(BAD / "v2-wrong-field.yaml").apply(broken.spec, version=2)
-    verify(wrong, broken.anchors, pages, baseline=broken.baseline)
-    assert pages.fetched == 19  # a second candidate needs no new requests
+    verify(wrong, broken.anchors, pages, baseline=broken.baseline, known=broken.known)
+    assert pages.fetched == 9 + 197  # a second candidate needs no new requests
     stored = [
         broken.snapshots.get(i) for i in broken.snapshots.snapshots(broken.spec.id, failed.run_id)
     ]
     # The run's listing page and diagnosis probes, then the verification pages.
-    assert [s.kind for s in stored].count("listing") == 1 + 2
-    assert [s.kind for s in stored].count("detail") == 3 + 17
+    assert [s.kind for s in stored].count("listing") == 1 + 9
+    assert [s.kind for s in stored].count("detail") == 3 + 197
     again = PageSource(broken.snapshots, broken.spec.id, failed.run_id)  # offline now
     assert again.listing_pages()[0].url == f"{broken.spec.fetch.start}"  # still page 1 first
     report = verify(good, broken.anchors, again, baseline=broken.baseline, known=broken.known)
     assert report.accepted, report.problems
-    # Like `promote`: the pages the first verification stored count as the run's now.
-    assert report.run_records == 20
+    # Like `promote`: the pages the first verification stored are enough for the verdict.
+    assert report.shadow is not None and report.shadow.compared == 200
 
 
 def test_diagnosis_uses_anchor_pages(broken: Broken) -> None:

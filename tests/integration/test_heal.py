@@ -253,6 +253,44 @@ def test_auto_mode_heals_within_one_run(world: World, layout: int) -> None:
     assert world.events.kinds == ["run_failed", "repair_promoted", "run_recovered"]
 
 
+# --- review attacks --------------------------------------------------------------------------
+# Repairs that are right on most records, and that the gate used to accept: the anchors
+# missed the records they get wrong. tests/integration/test_verification.py has their
+# exact problems, with anchors that all fit the attack.
+
+
+@pytest.mark.parametrize(
+    ("fixture", "field"),
+    [
+        ("v2-value-fitted-to-one-page.yaml", "value"),  # A3: 102 of 200 wrong
+        ("v2-value-drops-millions.yaml", "value"),  # S1: 29 of 200 wrong
+        ("v2-status-enumerates-examples.yaml", "status"),  # S2: 39 of 200 empty
+        ("v2-location-last-word.yaml", "location"),  # S3b: 12 of 200 wrong
+    ],
+)
+def test_review_attacks_are_quarantined(world: World, fixture: str, field: str) -> None:
+    world.layout(2)
+    assert world.run().status == "layout_changed"
+    outcome = world.heal(PatchProvider(load_patch(BAD / fixture)))
+    assert outcome.status == "quarantined"
+    [proposal] = outcome.proposals
+    assert proposal.status == "rejected"
+    assert proposal.report.problems
+    assert all(problem.startswith(f"{field} ") for problem in proposal.report.problems)
+
+
+def test_a_repair_fitted_to_the_examples_is_not_promoted_automatically(world: World) -> None:
+    # Review attack A3 under heal.mode auto: it used to become v2 with no human involved.
+    world.layout(2)
+    world.run()
+    outcome = world.heal(
+        PatchProvider(load_patch(BAD / "v2-value-fitted-to-one-page.yaml")), mode="auto"
+    )
+    assert outcome.status == "quarantined"
+    active = world.state.specs.active("tenders-demo")
+    assert active is not None and active.version == 1
+
+
 # --- the ladder's other rungs ---------------------------------------------------------------
 
 

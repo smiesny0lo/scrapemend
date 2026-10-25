@@ -1,0 +1,50 @@
+# Review attack S2 on layout v2: status only knows the values of the examples a
+# provider was shown (Open, Closed), so every Awarded status (39 of 200) is empty.
+rationale: 'v2: status is Open or Closed'
+confidence: 0.9
+container:
+  css: table.tender-table tr.tender-row
+follow:
+  css: a.tender-link::attr(href)
+next_page:
+  css: a[rel=next]::attr(href)
+fields:
+  reference:
+    strategies:
+    - css: dd.tender__ref
+    - label: Reference
+  title:
+    strategies:
+    - css: h1.tender__title
+  authority:
+    strategies:
+    - css: dd.tender__buyer
+    - label: Contracting authority
+  category:
+    strategies:
+    - css: dd.tender__category
+    - label: Category
+  location:
+    strategies:
+    - css: dd.tender__location
+    - label: Location
+  published:
+    strategies:
+    - css: dd.tender__published
+    - label: Published
+  deadline:
+    strategies:
+    - css: dd.tender__closing
+    - label: Deadline
+  value:
+    strategies:
+    - css: dd.tender__amount
+    - regex: Estimated value:?\s*(€\s?[\d,.]+)
+  status:
+    strategies:
+    - regex: ^(Open|Closed)$
+      within:
+        css: dd.tender__status
+  description:
+    strategies:
+    - css: div.tender__description p
