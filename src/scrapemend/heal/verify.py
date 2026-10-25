@@ -2,8 +2,10 @@
 
 A candidate is judged on pages under the current layout, never on its own say-so:
 
-1. Listing: does the item container still find items, do they still link to
-   detail pages, and is the next-page link still there?
+1. Listing: does the item container still find items, and do they still link to
+   detail pages? The next-page link is followed for two pages (or until it ends,
+   if the last good run had fewer): each page must load and bring new items, so a
+   link back to an earlier page, or one hard-coded to page 2, is caught.
 2. Anchors: on the anchor pages (fetched again under the new layout), does every
    field reproduce the known-good values? Stable fields must match exactly on at
    least heal.threshold of the anchors. Volatile ones (prices, statuses) may have
@@ -41,6 +43,8 @@ from scrapemend.spec import SourceSpec
 MIN_ANCHORS = 3  # anchor pages that must load for a verdict (all of them, if fewer)
 SAMPLE_PAGES = 10  # non-anchor detail pages checked for plausibility
 MIN_LINKED_SHARE = 0.8  # items that must still link to a detail page
+PAGINATION_HOPS = 2  # next-page links followed from the first listing page
+MAX_REPEATED_SHARE = 0.5  # of a listing page's items that may already have been seen
 MIN_VALUES = 3  # values a field must read before they are checked against known ones
 MAX_UNKNOWN_SHARE = 0.5  # of those, the share that may be new since the last good run
 
@@ -71,6 +75,7 @@ class VerificationReport(BaseModel):
     fields: dict[str, FieldCheck]
     listing_items: int | None = None  # items found on the run's first listing page
     listing_links: int | None = None  # of those, items with a detail link
+    listing_pages: int | None = None  # listing pages seen: the first, then along the next link
     sample: int = 0  # non-anchor pages checked
     problems: list[str] = Field(default_factory=list)
 
@@ -95,24 +100,22 @@ def verify(
     problems: list[str] = []
 
     # 1. listing
-    listing_items = listing_links = None
+    listing_items = listing_links = listing_pages = None
     links: list[str] = []
     listings = pages.listing_pages()
     if listings:
         first = listings[0]
-        items = select_all(spec.item.container, first)
+        items = _items(spec, first)
         listing_items = len(items)
         if not items:
             problems.append("the item container matches nothing on the listing page")
         if spec.item.follow is not None:
-            links = [link for link in (find_link(spec.item.follow, i) for i in items) if link]
+            links = [key for key, _ in items if key]
             listing_links = len(links)
             if items and len(links) < MIN_LINKED_SHARE * len(items):
                 problems.append(f"only {len(links)} of {len(items)} items link to a detail page")
-        paginate = spec.fetch.paginate
-        stopped = paginate is not None and find_link(paginate.next, first) is None
-        if stopped and baseline is not None and baseline.listing_pages > 1:
-            problems.append("no next-page link on the first listing page")
+        listing_pages, walk_problems = _walk(spec, pages, first, items, baseline)
+        problems += walk_problems
 
     # 2. anchors
     checks = {name: FieldCheck(volatile=f.volatile) for name, f in spec.fields.items()}
@@ -173,9 +176,79 @@ def verify(
         fields=checks,
         listing_items=listing_items,
         listing_links=listing_links,
+        listing_pages=listing_pages,
         sample=len(sample),
         problems=problems,
     )
+
+
+def _items(spec: SourceSpec, page: Document) -> list[tuple[str | None, Document]]:
+    """The items on a listing page, each with its key: the link to its detail page,
+    or, without detail pages, the value of the key field."""
+    follow = spec.item.follow
+    keys = None if follow else Extractor({spec.item.key: spec.fields[spec.item.key]})
+    found: list[tuple[str | None, Document]] = []
+    for item in select_all(spec.item.container, page):
+        if follow is not None:
+            key = find_link(follow, item)
+        else:
+            assert keys is not None
+            value = encode(keys.extract(item).fields[spec.item.key].value)
+            key = None if value is None else str(value)
+        found.append((key, item))
+    return found
+
+
+def _walk(
+    spec: SourceSpec,
+    pages: Pages,
+    first: Document,
+    items: list[tuple[str | None, Document]],
+    baseline: RunSummary | None,
+) -> tuple[int, list[str]]:
+    """Follow the next-page link from the first listing page for PAGINATION_HOPS
+    pages, or until it ends. Each page must load and bring items not seen on the
+    pages before, and the link must not end before the last good run's did.
+    Returns the number of listing pages seen and the problems found."""
+    paginate = spec.fetch.paginate
+    if paginate is None:
+        return 1, []
+    seen = {key for key, _ in items if key}
+    visited = {first.url}
+    page, number = first, 1
+    while number <= PAGINATION_HOPS:
+        link = find_link(paginate.next, page)
+        if link is None:
+            break
+        if link in visited:
+            return number, [
+                f"the next-page link on listing page {number} leads back to an earlier page"
+            ]
+        visited.add(link)
+        loaded = pages.listing(link)
+        if loaded is None:
+            return number, [f"listing page {number + 1} could not be loaded: {link}"]
+        keys = [key for key, _ in _items(spec, loaded) if key]
+        if not keys:
+            return number + 1, [f"the item container matches nothing on listing page {number + 1}"]
+        repeated = sum(key in seen for key in keys)
+        if repeated > MAX_REPEATED_SHARE * len(keys):
+            return number + 1, [
+                f"the next-page link on listing page {number} leads to a page that repeats "
+                f"{repeated} of {len(keys)} items already seen"
+            ]
+        seen.update(keys)
+        page, number = loaded, number + 1
+    expected = 1 if baseline is None else min(PAGINATION_HOPS + 1, baseline.listing_pages)
+    if number >= expected:
+        return number, []
+    if number == 1:
+        return number, ["no next-page link on the first listing page"]
+    assert baseline is not None
+    return number, [
+        f"pagination ends after {number} listing pages; "
+        f"the last good run had {baseline.listing_pages}"
+    ]
 
 
 def _shared_elements(

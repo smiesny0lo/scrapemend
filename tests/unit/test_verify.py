@@ -40,26 +40,41 @@ def page_set(n: int) -> dict[str, str]:
     return {f"{BASE}/d/{i}": detail(f"Title {i}", f"City {i % 4}", str(i)) for i in range(n)}
 
 
+def listing_for(urls: list[str], next_page: str | None = "?page=2") -> str:
+    items = "".join(f"<li><a href='{u}'>x</a></li>" for u in urls)
+    pager = f"<a class='next' href='{next_page}'>Next</a>" if next_page else ""
+    return f"<ul>{items}</ul>{pager}"
+
+
+# Listing pages 2 and 3, which the next-page link of every page 1 here leads to.
+MORE = {
+    f"{BASE}/list?page=2": listing_for([f"{BASE}/d/{i}" for i in range(30, 40)], "?page=3"),
+    f"{BASE}/list?page=3": listing_for([f"{BASE}/d/{i}" for i in range(40, 50)], None),
+}
+
+
 class FakePages:
-    def __init__(self, details: dict[str, str], listing: str | None = None) -> None:
+    def __init__(
+        self, details: dict[str, str], listing: str | None = None, more: dict[str, str] = MORE
+    ) -> None:
         self.details = details
-        self.listing = listing
+        self.first = listing
+        self.more = more
         self.requested: list[str] = []
+        self.listings: list[str] = []
 
     def listing_pages(self) -> list[Document]:
-        return (
-            [Document.parse(self.listing, url=f"{BASE}/list")] if self.listing is not None else []
-        )
+        return [Document.parse(self.first, url=f"{BASE}/list")] if self.first is not None else []
+
+    def listing(self, url: str) -> Document | None:
+        self.listings.append(url)
+        html = self.more.get(url)
+        return Document.parse(html, url=url) if html is not None else None
 
     def page(self, url: str) -> Document | None:
         self.requested.append(url)
         html = self.details.get(url)
         return Document.parse(html, url=url) if html is not None else None
-
-
-def listing_for(urls: list[str], next_link: bool = True) -> str:
-    items = "".join(f"<li><a href='{u}'>x</a></li>" for u in urls)
-    return f"<ul>{items}</ul>" + ("<a class='next' href='?page=2'>Next</a>" if next_link else "")
 
 
 def anchors_for(details: dict[str, str], urls: list[str]) -> list[Anchor]:
@@ -82,6 +97,7 @@ def anchors_for(details: dict[str, str], urls: list[str]) -> list[Anchor]:
 
 DETAILS = page_set(30)
 URLS = list(DETAILS)
+MORE_URLS = [f"{BASE}/d/{i}" for i in range(30, 60)]  # items on later listing pages
 ANCHORS = anchors_for(DETAILS, URLS[:10])
 BASELINE = RunSummary(source_id="demo", spec_version=1, run_id="good", listing_pages=5)
 
@@ -268,8 +284,59 @@ def test_items_must_still_link_to_details() -> None:
 
 
 def test_pagination_must_still_work() -> None:
-    report = run(spec(), FakePages(DETAILS, listing_for(URLS, next_link=False)))
+    report = run(spec(), FakePages(DETAILS, listing_for(URLS, next_page=None)))
     assert "no next-page link on the first listing page" in report.problems
+
+
+def test_pagination_is_followed_for_two_pages() -> None:
+    pages = FakePages(DETAILS, listing_for(URLS))
+    report = run(spec(), pages)
+    assert report.accepted, report.problems
+    assert report.listing_pages == 3
+    assert pages.listings == [f"{BASE}/list?page=2", f"{BASE}/list?page=3"]
+
+
+def test_next_page_link_leading_to_the_same_items_is_rejected() -> None:
+    # Like a pager whose first link is "Next" on page 1 and "Previous" on page 2: a
+    # page that wasn't visited yet, under another URL, listing the same items.
+    more = MORE | {f"{BASE}/list?page=3": listing_for(URLS[:25] + MORE_URLS[20:25], None)}
+    report = run(spec(), FakePages(DETAILS, listing_for(URLS), more))
+    assert report.problems == [
+        "the next-page link on listing page 2 leads to a page that repeats 25 of 30 items "
+        "already seen"
+    ]
+
+
+def test_some_items_on_several_pages_are_fine() -> None:
+    # A pinned item, or one pushed onto the next page while crawling.
+    more = MORE | {f"{BASE}/list?page=3": listing_for(URLS[:2] + MORE_URLS[10:18], None)}
+    assert run(spec(), FakePages(DETAILS, listing_for(URLS), more)).accepted
+
+
+def test_next_page_link_to_a_visited_page_is_rejected() -> None:
+    more = MORE | {f"{BASE}/list?page=2": listing_for(MORE_URLS[:10], "?page=2")}
+    report = run(spec(), FakePages(DETAILS, listing_for(URLS), more))
+    assert report.problems == ["the next-page link on listing page 2 leads back to an earlier page"]
+
+
+def test_pagination_ending_early_is_rejected() -> None:
+    # Like a link hard-coded to page 2: page 2 has no link onwards.
+    more = {f"{BASE}/list?page=2": listing_for(MORE_URLS[:10], None)}
+    report = run(spec(), FakePages(DETAILS, listing_for(URLS), more))
+    assert report.problems == ["pagination ends after 2 listing pages; the last good run had 5"]
+    two_pages = BASELINE.model_copy(update={"listing_pages": 2})
+    assert run(spec(), FakePages(DETAILS, listing_for(URLS), more), baseline=two_pages).accepted
+
+
+def test_next_listing_page_must_load() -> None:
+    report = run(spec(), FakePages(DETAILS, listing_for(URLS), more={}))
+    assert report.problems == [f"listing page 2 could not be loaded: {BASE}/list?page=2"]
+
+
+def test_next_listing_page_must_have_items() -> None:
+    more = MORE | {f"{BASE}/list?page=2": "<p>Nothing here</p>"}
+    report = run(spec(), FakePages(DETAILS, listing_for(URLS), more))
+    assert report.problems == ["the item container matches nothing on listing page 2"]
 
 
 def test_needs_anchors() -> None:

@@ -107,6 +107,7 @@ def test_correct_repair_is_accepted(broken: Broken) -> None:
     assert report.accepted, report.problems
     assert report.score == 1.0
     assert (report.anchors_checked, report.sample, report.listing_items) == (10, 10, 20)
+    assert report.listing_pages == 3  # the first, and two along the next-page link
 
 
 def test_unrepaired_spec_is_rejected(broken: Broken) -> None:
@@ -151,6 +152,21 @@ def test_volatile_field_reading_another_field_is_rejected(broken: Broken) -> Non
     }
 
 
+def test_next_page_link_must_lead_through_the_listing(broken: Broken) -> None:
+    # Review attacks 2a (v2: the first pager link, which on page 2 is "Previous")
+    # and 3c (v3: a link hard-coded to page 2). Page 1 has a link in both cases.
+    fixture, problem = {
+        2: (
+            "v2-first-pager-link.yaml",
+            "the next-page link on listing page 2 leads to a page that repeats "
+            "20 of 20 items already seen",
+        ),
+        3: ("v3-page-2.yaml", "pagination ends after 2 listing pages; the last good run had 10"),
+    }[layout(broken)]
+    report = broken.check(load_patch(BAD / fixture))
+    assert report.problems == [problem]
+
+
 def test_empty_repair_is_rejected(broken: Broken) -> None:
     report = broken.check(load_patch(BAD / "v2-empty.yaml"))
     assert not report.accepted
@@ -186,12 +202,20 @@ def test_verification_reuses_pages_and_stores_the_ones_it_fetched(broken: Broken
     )
     good = load_patch(REPAIRS / f"demo-v{layout(broken)}.yaml").apply(broken.spec, version=2)
     verify(good, broken.anchors, pages, baseline=broken.baseline)
-    assert pages.fetched == 17  # 7 anchor pages the failed run hadn't probed, 10 samples
+    # Listing pages 2 and 3, 7 anchor pages the failed run hadn't probed, 10 samples.
+    assert pages.fetched == 19
     wrong = load_patch(BAD / "v2-wrong-field.yaml").apply(broken.spec, version=2)
     verify(wrong, broken.anchors, pages, baseline=broken.baseline)
-    assert pages.fetched == 17  # a second candidate needs no new requests
-    stored = broken.snapshots.snapshots(broken.spec.id, failed.run_id)
-    assert len(stored) == 1 + 3 + 17  # listing, diagnosis probes, verification pages
+    assert pages.fetched == 19  # a second candidate needs no new requests
+    stored = [
+        broken.snapshots.get(i) for i in broken.snapshots.snapshots(broken.spec.id, failed.run_id)
+    ]
+    # The run's listing page and diagnosis probes, then the verification pages.
+    assert [s.kind for s in stored].count("listing") == 1 + 2
+    assert [s.kind for s in stored].count("detail") == 3 + 17
+    again = PageSource(broken.snapshots, broken.spec.id, failed.run_id)  # offline now
+    assert again.listing_pages()[0].url == f"{broken.spec.fetch.start}"  # still page 1 first
+    assert verify(good, broken.anchors, again, baseline=broken.baseline).accepted
 
 
 def test_diagnosis_uses_anchor_pages(broken: Broken) -> None:
