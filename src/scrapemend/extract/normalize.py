@@ -15,6 +15,18 @@ from scrapemend.extract.document import squash
 from scrapemend.spec.models import FieldSpec, Normalizer
 
 Value = str | int | Decimal | date | None
+Encoded = str | int | None  # a value as it is stored and compared
+
+
+def encode(value: Value) -> Encoded:
+    """A value in the form it is stored and compared in: decimals normalized, so
+    566600.00 and 566600.0 agree, and dates in ISO format."""
+    if isinstance(value, Decimal):
+        return f"{value.normalize():f}"
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
 
 # --- normalizers --------------------------------------------------------------------
 

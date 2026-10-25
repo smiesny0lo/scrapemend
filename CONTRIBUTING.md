@@ -19,6 +19,8 @@ mypy
 pytest
 ```
 
+The tests never call the Anthropic API: the anthropic provider is tested against recorded answers. To check that Claude still repairs the demo redesigns through the gate (a few API calls), set `ANTHROPIC_API_KEY` and `SCRAPEMEND_LIVE_ANTHROPIC=1`, and run `pytest -k live`.
+
 ## Ground rules
 
 - **Synthetic fixtures only.** Never commit real scraped data, snapshots of real sites, credentials, or server details.

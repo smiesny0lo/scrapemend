@@ -2,6 +2,8 @@
 
 A repair is only as good as the evidence that it works. scrapemend never trusts a repair because it looks right, or because the model that wrote it is confident. Every repair passes through the same **verification gate** before it can become the active spec, whether a human wrote it or an LLM proposed it.
 
+The gate is strict, but it only checks records whose pages it has: every record when the failed run stored their pages, a sample when it didn't. Read [what it can and can't catch](#what-the-gate-can-and-cant-catch) before you rely on it.
+
 ## Anchors: known-good records
 
 After every complete, good run, scrapemend keeps `heal.anchors` (default 10) records as **anchors**. For each anchor it stores:
@@ -15,24 +17,45 @@ Anchors are chosen by the lowest hash of their key. That makes the choice stable
 
 Values are stored in a comparable form: decimals normalized (`566600.00` equals `566600.0`) and dates as ISO strings.
 
+The good run also keeps the values of **every** valid record, by key, in the same form. Anchors are the records the gate can always look at, because it can fetch their pages again. The others are compared wherever the failed run stored their pages.
+
+A good run also records, for each field that takes only a few distinct values (a status, a category: up to 20 values, each seen at least three times on average), which values those were.
+
 ## The gate
 
-A candidate spec is judged on pages under the **new** layout. Pages the failed run already fetched are reused; the others are fetched politely and stored as snapshots, so the verdict can be reproduced later.
+A candidate spec is judged on pages under the **new** layout. Pages the failed run already fetched are reused; the others are fetched politely and stored as snapshots of that run, so the same verdict can be reached again later from the stored pages alone.
 
-1. **Listing.** Does the item container find items on the listing page? Do at least 80% of them link to a detail page? Is there still a next-page link, if the last good run had more than one page?
-2. **Anchors.** On each anchor's page, does every field reproduce the known value?
-   - *Stable* fields must match exactly.
-   - *Volatile* fields (`volatile: true`, such as prices or statuses) only need to be present where they were present, and absent where they were absent.
-   - **Every field must reach `heal.threshold` (default 90%) on its own**, so one wrongly mapped field can't hide behind nine correct ones. At least three anchor pages must load.
-3. **Sample.** On up to 10 other detail pages, which no one has known values for:
+1. **Listing.**
+   - The item container must find items on the first listing page, and **every** item it matches must have its key: its detail link, or, for a spec without detail pages, its key field. No item may be matched twice. A container that also matches a table's header row fails here.
+   - The next-page link is followed for **two pages**, or until it ends if the last good run had fewer pages. Each page must load, pass the same item check, and bring items not seen on the pages before. A link that leads back to an earlier page (a pager whose first link is "Next" on page 1 and "Previous" on page 2) or one hard-coded to page 2 fails here.
+2. **Anchors.** On each anchor's page, does every field reproduce the known value? **Every field is judged on its own**, so one wrongly mapped field can't hide behind nine correct ones.
+   - *Stable* fields must match exactly on `heal.threshold` of the anchors: by default **all of them**.
+   - *Volatile* fields (`volatile: true`, such as prices or statuses) may have changed since the last good run, but most must not: at least `heal.volatile_match` (default 60%) must still match exactly.
+   - Anchor pages that fail to load (a notice taken down since) are left out, but at least three must load, or all of them if there are fewer than three.
+   - No two fields may read the same text from the same element where their known values differ: one of them is reading the wrong thing. Two fields may read different parts of one element, like a category and a location from "Construction · Dunmere".
+   - For a spec without detail pages (no `item.follow`), an anchor's page is only the listing page it was on. The gate finds the anchor's item by its key among the items of the listing pages it has seen, then on the anchor's own listing page.
+3. **The failed run's pages.** Every record on the pages the failed run stored, whose key the last good run also had, must reproduce that run's values: the records of its detail pages, or, for a spec without detail pages, the items of its listing pages. Nothing is fetched for this step.
+   - *Stable* fields must match on `heal.threshold` of these records, as on the anchors: by default **all of them**.
+   - *Volatile* fields must match on at least `heal.volatile_match` of them, and a volatile field that takes only a few values (a status) must mostly read values from that set (see step 5).
+   - At least **20** such records are needed. A run whose item container broke never reached the detail pages: it stored its listing pages and the three anchor pages it probed. Then only the anchors' values are compared, and the report says so:
+
+     ```
+     note: only 3 records on the failed run's stored pages are known from the last good run (needs 20), so known values were compared on the anchors only
+     ```
+
+   - The stored pages are those stored when the verification starts: the failed run's own, and any that an earlier verification fetched. So `promote` also compares the anchor and sample pages that `heal` fetched.
+4. **Sample.** On up to 10 other items of the first listing page (their detail pages, if the spec has them), which no one has known values for:
    - required fields must be filled;
    - a field that is usually filled must not be empty everywhere;
    - a field whose value differs between anchors must not read the same value on every page.
+5. **Known values.** A field that took only a few values in the last good run must mostly read values from that set on the anchor and sample pages. A new value now and then is fine; a status that reads "Construction" on every page is not.
 
-A repair is accepted only if there are no problems at all. The report names each problem, for example:
+A repair is accepted only if there are no problems at all. The report names each problem, for example, for a repair that reads the location from the category's element:
 
 ```
-location reproduces 0/10 anchor values (needs 90%); expected 'Glenhollow', got 'Consulting'
+location reproduces 0/10 anchor values (needs 100%); expected 'Glenhollow', got 'Consulting'
+category and location read the same element on 10 of 10 anchor pages
+location reads values the last good run never had on 20 of 20 pages (e.g. 'Consulting'; ...)
 ```
 
 ## Held-out anchors catch overfitting
@@ -41,18 +64,50 @@ A repair provider sees only **three** of the anchors as examples: their values, 
 
 A strategy that memorised the examples instead of finding where values live in the markup is caught by two checks:
 
-- The held-out anchors fail. A regex matching exactly the three shown titles reproduces 3 of 10.
+- The held-out anchors fail. A regex matching exactly the three shown titles reproduces only those (and any held-out anchor that happens to share a title).
 - The sample check fails, because the strategy finds nothing, or the same thing, everywhere else.
 
-The test suite proves this on the demo site. Its verification tests hand the gate these repairs and check every verdict:
+The test suite runs the gate against the demo site with these repairs:
 
 | Repair | Verdict |
 |---|---|
-| correct repairs for both redesigns | accepted |
+| correct repairs for both redesigns, hand-written or Claude's | accepted |
 | `location` reading the category element | rejected |
 | `deadline` reading the publication date (both are valid dates in the same format) | rejected |
+| `status`, a volatile field, reading the category | rejected |
+| the next-page link being the pager's first link ("Previous" from page 2 on) | rejected |
+| the next-page link hard-coded to page 2 | rejected |
+| an item container that also matches the header row | rejected |
+| `location` as the last word of the title, wrong only for "Fenwick Vale" (12 of 200 notices), with 10 random anchors (10 draws, 5 with no such notice), when the failed run stored every detail page | rejected |
+| a correct repair, checked on all 200 stored detail pages | accepted |
 | selectors that match nothing | rejected |
 | strategies hard-coding the shown examples' values | rejected |
+| a correct repair of a spec without detail pages | accepted |
+
+## What the gate can and can't catch
+
+The gate compares a repair with what it knows: ten anchors, the records on the pages the failed run stored, about ten other pages, the first three listing pages, and the values of the last good run. Within that, it is strict. Outside it, it is blind.
+
+**It catches:**
+
+- a field reading the wrong element, if the values differ from the known ones on any anchor or stored record (stable fields), or on more than 40% of them (volatile fields);
+- a field wrong on only a few records, if the failed run stored the pages of one of them and of at least 20 records the last good run had. A repair that reads the location as the last word of the title is wrong on 12 notices of 200. When the failed run stored all 200 detail pages, the repair is rejected with any anchors: the tests draw ten random anchors 10 times, 5 of the draws hold no such notice, and all 10 are rejected;
+- two fields reading one element where their known values differ;
+- a field with a small set of values (a status, a category) reading something else on most checked pages;
+- strategies that only fit the examples a provider was shown;
+- a required field that is empty on other pages;
+- an item container that finds nothing, finds things that aren't items, or finds items twice, on the listing pages it checks;
+- a next-page link that loops, stays on one page, or stops early, within the first three pages.
+
+**It can't catch:**
+
+- **A field wrong on only some records, when the failed run didn't store their pages.** Which pages it stored depends on how it failed. If only the detail pages changed, or one field broke (`partial`), the run crawled every detail page, and every record is checked. If the item container broke, as in both demo redesigns, the run never reached the detail pages, and only the anchors have known values. Then the last-word location repair (wrong on 12 notices of 200) passes whenever ten anchors from 200 miss all 12: about **53%** of the time. A field wrong on 2 records in 200 passes about 90% of the time. `promote` checks a little more, the anchor and sample pages `heal` stored (20 in the demo), but the sample pages come from the first listing page, not at random. More anchors (`heal.anchors`) narrow this, but no sample closes it. Watch the first runs after a promotion.
+- **Plausible values on pages without known values.** The sample check catches empty and constant values, not a wrong title that looks like a title. Records new since the last good run have no known values either.
+- **Pagination that breaks later.** Only the first three listing pages are checked; a next-page link that fails on page 7 isn't seen.
+- **Volatile fields wrong on a minority of records.** Up to 40% of anchors and stored records may differ by default, because prices and statuses do change. A volatile field mapped to something that agrees with it on most records passes.
+- **Custom strategies sharing an element.** The shared-element check needs to know which element a strategy read. Built-in strategies can say; a custom strategy can only if it has a `locate(doc)` method.
+
+**It can reject a correct repair** when the data really changed: a stable field corrected since the last good run on an anchor page or on any stored page (with thousands of stored pages, one edited title is enough), more than 40% of a volatile field's values changed, or a small set of values replaced wholesale (statuses renamed). If that happens, look at the report, then lower `heal.threshold` or `heal.volatile_match`, mark the field `volatile`, or run the spec once with a version that works to refresh the anchors.
 
 ## Then what?
 
@@ -69,6 +124,8 @@ scrapemend diff SPEC ID      # review it
 scrapemend promote SPEC ID   # accept it
 ```
 
-If no repair passes, the source is quarantined and an alert goes out. The rejected proposals stay stored, so a human can see what was tried and why it failed.
+`promote` runs the gate again before anything changes, against the current anchors and the failed run's stored pages (pass the same `--snapshots` as the run). The anchors may have been refreshed since, or the proposal accepted by an older version of the gate; one that no longer passes is marked rejected and not promoted (exit code 3). A proposal made for another spec version than the active one is refused; `--force` applies it to the active version instead, and verifies that.
+
+If no repair passes, the source is quarantined, and a `repair_rejected` or `quarantined` event goes to the notifiers you configured with `--notify`. The rejected proposals stay stored, so a human can see what was tried and why it failed.
 
 `blocked`, `transient` and `drift` are never repaired: the site refused or failed us, or real-world data changed. That isn't something a selector should fix.

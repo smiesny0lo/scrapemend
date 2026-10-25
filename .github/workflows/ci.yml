@@ -41,8 +41,13 @@ jobs:
 
   demo:
     # The README's demo, exactly as a newcomer runs it: break, detect, repair, verify,
-    # promote and scrape again through the real CLI, for both redesigns.
-    runs-on: ubuntu-latest
+    # promote and scrape again through the real CLI, for both redesigns. On Windows
+    # too, where output to a pipe defaults to a legacy code page.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

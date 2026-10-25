@@ -69,6 +69,15 @@ class ProposalStore:
         )
         return [_proposal(row) for row in rows]
 
+    def reverified(self, proposal_id: int, report: VerificationReport) -> None:
+        """Store the verdict of verifying a proposal again (before promoting it)."""
+        status: ProposalStatus = "accepted" if report.accepted else "rejected"
+        with self.db:
+            self.db.execute(
+                "UPDATE proposals SET report = ?, status = ? WHERE id = ?",
+                (report.model_dump_json(), status, proposal_id),
+            )
+
     def mark_promoted(self, proposal_id: int, version: int) -> None:
         with self.db:
             self.db.execute(

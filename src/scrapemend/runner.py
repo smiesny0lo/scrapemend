@@ -39,7 +39,7 @@ def run_source(
 
     Valid records are passed to `on_record` as they arrive (invalid ones too with
     `keep_invalid`). Only a complete, good run of mode "run" becomes the new baseline
-    and refreshes the source's anchors.
+    and refreshes the source's anchors and known records.
     """
     runs = state.runs
     started = datetime.now(UTC)
@@ -69,7 +69,9 @@ def run_source(
         stopped_early = summary.listing_pages == 1 and (limit is None or summary.items < limit)
         if paginate and baseline and baseline.listing_pages > 1 and stopped_early:
             next_link_missing = find_link(paginate.next, crawl.first_listing) is None
-        if summary.items == 0:
+        # Detail pages known from a good run show which fields broke. Without detail
+        # pages there is nothing to probe: the item container is what broke.
+        if summary.items == 0 and spec.item.follow is not None:
             known = state.anchors.all(spec.id)
             if known:
                 diagnosis = _diagnose_anchors(crawl, known)
@@ -116,7 +118,7 @@ def run_source(
         for kind, prints in summary.fingerprints.items():
             if prints:
                 runs.set_baseline(spec.id, kind, prints[0], summary.run_id)
-        state.anchors.replace(spec.id, picker.anchors())
+        state.anchors.replace(spec.id, picker.anchors(), picker.records())
     if notifier is not None:
         _notify(notifier, report, previous)
     return report

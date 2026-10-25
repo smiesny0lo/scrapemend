@@ -16,8 +16,15 @@ class CssStrategy:
         self._select = CSSSelector(spec.selector, translator="html")
 
     def extract(self, doc: Document) -> str | None:
+        element = self.locate(doc)
+        if element is None:
+            return None
+        value = squash(element.get(self.spec.attr)) if self.spec.attr else text_of(element)
+        return value or None
+
+    def locate(self, doc: Document) -> HtmlElement | None:
+        """The element the value is read from."""
         # A CSS selection is always a list of elements; the stubs type it like any XPath result.
         for element in cast(list[HtmlElement], self._select(doc.root)):
-            value = squash(element.get(self.spec.attr)) if self.spec.attr else text_of(element)
-            return value or None
+            return element
         return None

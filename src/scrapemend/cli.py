@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Literal, NoReturn, TextIO
+from typing import Annotated, Literal, NoReturn
 
 import typer
 from pydantic import ValidationError
@@ -21,7 +21,15 @@ from scrapemend.extract import Extractor
 from scrapemend.extract.strategies import UnknownStrategy
 from scrapemend.fetch import DEFAULT_USER_AGENT, HttpFetcher
 from scrapemend.heal.context import spec_yaml
-from scrapemend.heal.ladder import HealOutcome, heal, promote, rollback, run_and_heal
+from scrapemend.heal.ladder import (
+    HealOutcome,
+    PromotionRefused,
+    heal,
+    promote,
+    rollback,
+    run_and_heal,
+)
+from scrapemend.heal.pages import PageSource
 from scrapemend.heal.providers import PatchProvider, ProviderError, RepairProvider, make_provider
 from scrapemend.pipeline import ValidatedRecord
 from scrapemend.runner import run_source
@@ -70,6 +78,7 @@ def main(
     ] = False,
 ) -> None:
     """Self-healing scraper engine."""
+    _utf8_output()
 
 
 @app.command()
@@ -163,7 +172,7 @@ def run(
         raise typer.Exit(3)
     source = _with_start(active.spec, start)
     repairer = _provider(provider, patch, model)
-    output = out.open("w", encoding="utf-8", newline="\n") if out else _utf8_stdout()
+    output = out.open("w", encoding="utf-8", newline="\n") if out else sys.stdout
 
     def write(record: ValidatedRecord) -> None:
         output.write(json.dumps(record.record, default=_json_value, ensure_ascii=False) + "\n")
@@ -333,9 +342,18 @@ def diff(
 def promote_command(
     spec: SpecArgument,
     proposal: Annotated[int, typer.Argument(help="The id of a verified proposal.")],
+    force: Annotated[
+        bool,
+        typer.Option(
+            help="Apply a proposal made for an older version to the active one (verified again)."
+        ),
+    ] = False,
     db: DbOption = DEFAULT_DB,
+    snapshots: SnapshotsOption = DEFAULT_SNAPSHOTS,
+    user_agent: UserAgentOption = DEFAULT_USER_AGENT,
 ) -> None:
-    """Make a verified proposal the active spec version."""
+    """Verify a proposal again and make it the active spec version (exit 3 if it no
+    longer passes). Pages are read from the failed run's snapshots where possible."""
     state = State(db)
     source_id = _load(spec).id
     found = state.proposals.get(proposal)
@@ -343,8 +361,26 @@ def promote_command(
         _fail(f"{source_id} has no proposal {proposal}")
     if found.status != "accepted":
         _fail(f"proposal {proposal} is {found.status}: only verified proposals can be promoted")
-    version = promote(state, found)
-    typer.echo(f"{source_id}: proposal {proposal} promoted; v{version.version} is now active")
+    active = state.specs.active(source_id)
+    if active is None:
+        _fail(f"{source_id} has no spec versions")
+    store = FilesystemSnapshotStore(snapshots)
+    with _fetcher(_buildable(active.spec), user_agent) as fetcher, _interruptible():
+        pages = PageSource(
+            store, source_id, found.run_id, fetcher=fetcher, spec_version=found.base_version
+        )
+        try:
+            version = promote(state, found, pages, force=force)
+        except PromotionRefused as e:
+            _fail(str(e), 1 if e.report is None else 3)
+    verified = state.proposals.get(proposal)
+    assert verified is not None
+    onto = f" (re-based onto v{active.version})" if found.base_version != active.version else ""
+    typer.echo(
+        f"{source_id}: proposal {proposal}{onto} verified again "
+        f"(weakest field {verified.report.score:.0%} of anchors) and promoted; "
+        f"v{version.version} is now active"
+    )
 
 
 @app.command(name="rollback")
@@ -508,11 +544,13 @@ def _notifier(names: list[str] | None) -> Notifier:
     return Notifiers(notifiers)
 
 
-def _utf8_stdout() -> TextIO:
-    # JSONL is UTF-8; a Windows console or pipe may default to a legacy code page.
-    if isinstance(sys.stdout, io.TextIOWrapper):
-        sys.stdout.reconfigure(encoding="utf-8")
-    return sys.stdout
+def _utf8_output() -> None:
+    """Write UTF-8 everywhere. Records, reports and diffs carry page text (€, ·)
+    that a legacy code page, which Windows uses for pipes and files, can't always
+    encode; and whoever reads the output can rely on one encoding."""
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
 def _json_value(value: object) -> str:
@@ -539,6 +577,8 @@ def _print_heal(outcome: HealOutcome) -> None:
             err(f"    changes: {', '.join(p.patch.changes())}")
         for problem in p.report.problems[:5]:
             err(f"    problem: {problem}")
+        for note in p.report.notes:
+            err(f"    note: {note}")
 
 
 def _print_report(report: RunReport, fetcher: HttpFetcher, snapshots: Path) -> None:

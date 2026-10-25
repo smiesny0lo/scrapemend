@@ -30,7 +30,7 @@ def record(**values: Any) -> RecordResult:
             fields[name] = value
         else:
             fields[name] = FieldResult(value, None if value is None else str(value), 0)
-    return RecordResult(url="http://x.org/1", fields=fields)
+    return RecordResult(url="http://example.org/1", fields=fields)
 
 
 def kinds(result: RecordResult) -> list[tuple[str | None, str]]:

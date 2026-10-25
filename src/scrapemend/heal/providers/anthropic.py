@@ -1,9 +1,10 @@
 """Repairs proposed by Claude through the Anthropic API (install the `anthropic` extra).
 
-The model sees the repair context and answers with structured output: a JSON
-object matching RepairOutput, which the SDK validates. It is turned into a
-SpecPatch, validated again, and then judged by the verification gate like any
-other repair. Nothing the model returns is executed.
+The model sees the repair context and answers with structured output: the request's
+output_config.format holds RepairOutput's JSON schema, and the JSON text that comes
+back is validated against RepairOutput. It is turned into a SpecPatch, validated
+again, and then judged by the verification gate like any other repair. Nothing the
+model returns is executed.
 """
 
 import os
@@ -127,6 +128,8 @@ element, as in <dt>Deadline</dt><dd>VALUE</dd>.
 with the label, as in <p>Deadline: VALUE</p> or <p>Deadline <b>VALUE</b></p>.
 - {regex: PATTERN, within: null}: searches the page's visible text; capture group 1 is the \
 value. With within: {css: ...} only that element's text is searched, which is much safer.
+- {custom: ...} strategies in the current spec come from plugins. You can't propose them; \
+they stay where they are, and the strategies you give for that field are added around them.
 container, follow and next_page take css or xpath only; follow and next_page must give URLs \
 (css without ::attr reads the href). Text is whitespace-collapsed, and text in separate block \
 elements is separated by a space. CSS is translated by cssselect: :nth-child, :not and :has \
@@ -214,17 +217,17 @@ class AnthropicProvider:
         self.effort = effort
         self.max_tokens = max_tokens
         self.fallbacks = fallbacks
-        if client is None:
-            try:
-                import anthropic
-            except ImportError:
-                raise ProviderError(
-                    "the anthropic provider needs the anthropic package: "
-                    "pip install 'scrapemend[anthropic]'"
-                ) from None
-            client = anthropic.Anthropic()
-        self.client = client
-        self.last_usage: Any = None
+        try:
+            import anthropic
+        except ImportError:
+            raise ProviderError(
+                "the anthropic provider needs the anthropic package: "
+                "pip install 'scrapemend[anthropic]'"
+            ) from None
+        # The SDK adapts the schema to what structured outputs support.
+        schema = anthropic.transform_schema(RepairOutput)
+        self.output_format: dict[str, Any] = {"type": "json_schema", "schema": schema}
+        self.client = client if client is not None else anthropic.Anthropic()
 
     def request(self, context: RepairContext) -> dict[str, Any]:
         """The API request for a context (separate from sending it, for inspection)."""
@@ -239,8 +242,7 @@ class AnthropicProvider:
             "max_tokens": self.max_tokens,
             "system": SYSTEM,
             "messages": [{"role": "user", "content": content}],
-            "output_format": RepairOutput,
-            "output_config": {"effort": self.effort},
+            "output_config": {"effort": self.effort, "format": self.output_format},
         }
         if self.fallbacks:
             request |= {"betas": [FALLBACK_BETA], "fallbacks": "default"}
@@ -248,23 +250,25 @@ class AnthropicProvider:
 
     def propose(self, context: RepairContext) -> SpecPatch | None:
         try:
-            response = self.client.beta.messages.parse(**self.request(context))
-        except ValidationError as e:
-            raise ProviderError(f"the model's answer did not match the schema: {e}") from None
+            response = self.client.beta.messages.create(**self.request(context))
         except Exception as e:  # the SDK's APIError family, without importing it here
             if type(e).__module__.startswith("anthropic"):
                 raise ProviderError(f"Anthropic API error: {e}") from None
             raise
-        self.last_usage = getattr(response, "usage", None)
         if response.stop_reason == "refusal":
             details = getattr(response, "stop_details", None)
             category = getattr(details, "category", None)
             raise ProviderError(f"the model declined to answer (category: {category})")
         if response.stop_reason == "max_tokens":
             raise ProviderError(f"the answer was cut off at max_tokens={self.max_tokens}")
-        output = response.parsed_output
-        if output is None:
+        # The answer is the first text block (thinking blocks may come before it).
+        text = next((block.text for block in response.content if block.type == "text"), None)
+        if text is None:
             raise ProviderError("the response contained no structured answer")
+        try:
+            output = RepairOutput.model_validate_json(text)
+        except ValidationError as e:
+            raise ProviderError(f"the model's answer did not match the schema: {e}") from None
         try:
             patch = output.to_patch()
         except (ValidationError, ValueError) as e:

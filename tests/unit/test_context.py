@@ -81,7 +81,7 @@ def test_spec_yaml_round_trips() -> None:
 def test_examples_show_values_and_their_text() -> None:
     anchor = Anchor(
         key="k",
-        url="https://x.org/1",
+        url="https://example.org/1",
         values={"deadline": "2026-09-27"},
         raw={"deadline": "27 Sep 2026"},
         strategies={"deadline": 0},

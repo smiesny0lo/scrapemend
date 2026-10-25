@@ -30,6 +30,7 @@ htmlcov/
 CLAUDE.md
 ROADMAP.md
 docs/DESIGN.md
+/review/
 
 # Editors / OS
 .idea/

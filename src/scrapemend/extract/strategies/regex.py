@@ -25,6 +25,16 @@ class RegexStrategy:
             self._within = etree.XPath(within.xpath)
 
     def extract(self, doc: Document) -> str | None:
+        found = self._find(doc)
+        return found[1] if found else None
+
+    def locate(self, doc: Document) -> etree._Element | None:
+        """The element whose text was searched: the `within` element, or the whole scope."""
+        found = self._find(doc)
+        return found[0] if found else None
+
+    def _find(self, doc: Document) -> tuple[etree._Element, str] | None:
+        element: etree._Element = doc.root
         text = doc.text
         if self._within is not None:
             found = self._within(doc.root)
@@ -32,8 +42,10 @@ class RegexStrategy:
             elements = [e for e in found if isinstance(e, etree._Element)]
             if not elements:
                 return None
-            text = text_of(elements[0])
+            element = elements[0]
+            text = text_of(element)
         match = self._pattern.search(text)
         if match is None:
             return None
-        return squash(match.group(1) if self._pattern.groups else match.group(0)) or None
+        value = squash(match.group(1) if self._pattern.groups else match.group(0))
+        return (element, value) if value else None

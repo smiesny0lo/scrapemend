@@ -129,7 +129,11 @@ def test_parse_url() -> None:
 
 @pytest.mark.parametrize(
     ("text", "base"),
-    [("mailto:a@example.org", None), ("javascript:void(0)", "http://x.org"), ("/relative", None)],
+    [
+        ("mailto:a@example.org", None),
+        ("javascript:void(0)", "http://example.org"),
+        ("/relative", None),
+    ],
 )
 def test_parse_url_rejects(text: str, base: str | None) -> None:
     with pytest.raises(ValueError, match="not an http"):
@@ -162,4 +166,4 @@ def test_convert_empty_after_normalizing() -> None:
 
 def test_convert_url_uses_base() -> None:
     link = field(type="url")
-    assert convert("/a", link, base_url="http://x.org/b") == "http://x.org/a"
+    assert convert("/a", link, base_url="http://example.org/b") == "http://example.org/a"

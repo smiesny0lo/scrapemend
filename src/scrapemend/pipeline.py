@@ -14,15 +14,18 @@ from pydantic import BaseModel, Field
 
 from scrapemend.detect.fingerprint import fingerprint
 from scrapemend.extract import Document, Extractor, FieldResult, RecordResult, Value
+from scrapemend.extract.normalize import Encoded, encode
 from scrapemend.extract.select import find_link, select_all
 from scrapemend.fetch import BlockedError, Fetcher, FetchError, TransientError
 from scrapemend.ids import new_run_id
 from scrapemend.snapshots import Snapshot, SnapshotKind, SnapshotStore
-from scrapemend.spec import FieldSpec, SourceSpec
+from scrapemend.spec import SourceSpec
 from scrapemend.validate import DISQUALIFYING, Violation, validate_record
 
 MAX_CONSECUTIVE_FAILURES = 5
 FINGERPRINTS_PER_KIND = 3  # pages per kind whose fingerprint the run summary keeps
+DOMAIN_LIMIT = 20  # distinct values a field may take and still count as a small set
+DOMAIN_REPEATS = 3  # ... if each value occurs this often on average
 
 
 class RunAborted(Exception):
@@ -47,16 +50,34 @@ class FieldStats(BaseModel):
     unusable: int = 0  # text found but not convertible to the field's type
     invalid: int = 0  # record validation failures (missing required, wrong format)
     winners: dict[int, int] = Field(default_factory=dict)  # strategy index -> records won
+    # The distinct values found (as anchors store them), until there are more than
+    # DOMAIN_LIMIT; then None. Repairs are checked against the values of a status or
+    # a category, so they can't read a neighbouring element instead.
+    domain: list[Encoded] | None = Field(default_factory=list)
 
     @property
     def fallback_wins(self) -> int:
         return sum(n for index, n in self.winners.items() if index > 0)
+
+    @property
+    def known_values(self) -> set[Encoded] | None:
+        """The values of a field that takes only a few, each found several times
+        (a status, a category); None for any other field."""
+        if not self.domain or self.filled < DOMAIN_REPEATS * len(self.domain):
+            return None
+        return set(self.domain)
 
     def add(self, field: FieldResult, violations: Iterable[Violation]) -> None:
         if field.value is None:
             self.empty += 1
         else:
             self.filled += 1
+            value = encode(field.value)
+            if self.domain is not None and value not in self.domain:
+                if len(self.domain) < DOMAIN_LIMIT:
+                    self.domain.append(value)
+                else:
+                    self.domain = None
         if field.error is not None:
             self.unusable += 1
         if any(v.kind in DISQUALIFYING for v in violations):
@@ -118,17 +139,6 @@ class ValidatedRecord:
     @property
     def valid(self) -> bool:
         return not any(v.kind in DISQUALIFYING for v in self.violations)
-
-
-def tally(
-    records: Iterable[ValidatedRecord], fields: Mapping[str, FieldSpec]
-) -> dict[str, FieldStats]:
-    """Per-field statistics over some records."""
-    stats = {name: FieldStats() for name in fields}
-    for record in records:
-        for name, field in record.fields.items():
-            stats[name].add(field, (v for v in record.violations if v.field == name))
-    return stats
 
 
 @dataclass(frozen=True)

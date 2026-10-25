@@ -6,7 +6,7 @@ import pytest
 from scrapemend.extract import Document
 from scrapemend.extract.select import find_link, select_all
 from scrapemend.fetch import BlockedError, FetchError, Response, TransientError
-from scrapemend.pipeline import MAX_CONSECUTIVE_FAILURES, RunAborted, SourceRun
+from scrapemend.pipeline import MAX_CONSECUTIVE_FAILURES, FieldStats, RunAborted, SourceRun
 from scrapemend.snapshots import FilesystemSnapshotStore
 from scrapemend.spec import CssSpec, SourceSpec, XPathSpec
 
@@ -202,6 +202,29 @@ def test_counts_fallbacks_and_empty_fields(tmp_path: Path) -> None:
         {"price": 1},
         {"price": 1},
     )
+
+
+def test_keeps_the_values_of_fields_that_take_few(tmp_path: Path) -> None:
+    # A status has a handful of values; a title has one per item. The verification
+    # gate checks that a repaired spec still reads values from the handful.
+    source = spec(
+        fields={
+            "title": {"required": True, "strategies": [{"css": "h1"}]},
+            "status": {"strategies": [{"css": ".status"}]},
+            "due": {"type": "date", "strategies": [{"css": ".due"}]},
+        }
+    )
+    pages: dict[str, str | int | FetchError] = {f"{BASE}/list": listing(*map(str, range(25)))}
+    for i in range(25):
+        status = "Open" if i % 2 else "Closed"
+        pages[f"{BASE}/{i}"] = f"<h1>T{i}</h1><p class='status'>{status}</p><p class='due'>1.2.2026"
+    source_run = run(pages, tmp_path, source=source)
+    list(source_run.records())
+    fields = source_run.summary.fields
+    assert fields["status"].known_values == {"Closed", "Open"}
+    assert fields["due"].known_values == {"2026-02-01"}  # compared as anchors are: ISO
+    assert (fields["title"].domain, fields["title"].known_values) == (None, None)  # 25 titles
+    assert FieldStats(filled=5, domain=["a", "b"]).known_values is None  # too few repeats
 
 
 # --- selection helpers ---------------------------------------------------------------

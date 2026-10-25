@@ -5,6 +5,7 @@ scrape succeeds; the same for v3. The LLM path runs the real AnthropicProvider
 against Claude's answers recorded from a live run (tests/fixtures/recorded).
 """
 
+import os
 import random
 import shutil
 from collections.abc import Iterator
@@ -23,14 +24,18 @@ from scrapemend.cli import app as cli
 from scrapemend.events import Event
 from scrapemend.fetch import HttpFetcher
 from scrapemend.heal.context import RepairContext
-from scrapemend.heal.ladder import heal, promote, rollback, run_and_heal
+from scrapemend.heal.ladder import PromotionRefused, heal, promote, rollback, run_and_heal
+from scrapemend.heal.pages import PageSource
+from scrapemend.heal.proposals import Proposal
 from scrapemend.heal.providers import NoneProvider, PatchProvider
 from scrapemend.heal.providers.anthropic import AnthropicProvider
+from scrapemend.heal.verify import VerificationReport
 from scrapemend.runner import run_source
 from scrapemend.runs import RunReport
 from scrapemend.snapshots import FilesystemSnapshotStore
 from scrapemend.spec import SourceSpec, load_patch, load_spec
 from scrapemend.spec.patch import SpecPatch
+from scrapemend.spec.store import SpecVersion
 from scrapemend.state import State
 from tests.support import FakeClock, RecordedClaude, serve
 
@@ -135,6 +140,16 @@ class World:
             **kwargs,
         )
 
+    def promote(self, proposal: Proposal, force: bool = False) -> SpecVersion:
+        """Promote a proposal, verifying it again on the failed run's pages."""
+        pages = PageSource(
+            self.snapshots,
+            proposal.source_id,
+            proposal.run_id,
+            fetcher=fetcher(self.site, self.spec),
+        )
+        return promote(self.state, proposal, pages, force=force)
+
     def heal(self, provider: Any, spec: SourceSpec | None = None, **kwargs: Any) -> Any:
         spec = spec or self.spec
         return heal(
@@ -174,7 +189,11 @@ def expected_records(base_url: str) -> dict[str, str]:
 
 
 @pytest.mark.parametrize("layout", [2, 3])
-def test_claude_heals_the_redesign_end_to_end(world: World, layout: int) -> None:
+def test_recorded_claude_answers_heal_the_redesign(world: World, layout: int) -> None:
+    """The real AnthropicProvider, request and all, answered by Claude's structured
+    answers recorded from a live run: no API call. It shows that those answers pass
+    today's gate and heal the site, not that Claude would answer the same again;
+    test_live_claude_heals_the_redesign checks that, when asked to."""
     world.layout(layout)
     failed = world.run()
     assert failed.status == "layout_changed"
@@ -190,13 +209,32 @@ def test_claude_heals_the_redesign_end_to_end(world: World, layout: int) -> None
     assert sent.count("- url: ") == 3
     assert ("tender-table" if layout == 2 else "rounded-lg") in sent
 
-    version = promote(world.state, proposal)
+    version = world.promote(proposal)
     assert version.version == 2 and version.origin == "repair"
     titles: dict[str, str] = {}
     healed = world.run(on_record=lambda r: titles.__setitem__(str(r.url), str(r.record["title"])))
     assert (healed.status, healed.spec_version, healed.summary.valid_records) == ("ok", 2, 200)
     assert titles == expected_records(world.site.base_url)
     assert world.events.kinds == ["run_failed", "repair_proposed", "run_recovered"]
+
+
+@pytest.mark.skipif(
+    os.environ.get("SCRAPEMEND_LIVE_ANTHROPIC") != "1",
+    reason="calls the Anthropic API: set SCRAPEMEND_LIVE_ANTHROPIC=1 and ANTHROPIC_API_KEY",
+)
+@pytest.mark.parametrize("layout", [2, 3])
+def test_live_claude_heals_the_redesign(world: World, layout: int) -> None:
+    """Claude, asked now, repairs the redesign through the gate (one or two API calls)."""
+    world.layout(layout)
+    assert world.run().status == "layout_changed"
+    outcome = world.heal(AnthropicProvider())
+    assert outcome.status == "proposed", outcome.message
+    accepted = next(p for p in outcome.proposals if p.status == "accepted")
+    world.promote(accepted)
+    titles: dict[str, str] = {}
+    healed = world.run(on_record=lambda r: titles.__setitem__(str(r.url), str(r.record["title"])))
+    assert (healed.status, healed.summary.valid_records) == ("ok", 200)
+    assert titles == expected_records(world.site.base_url)
 
 
 @pytest.mark.parametrize("layout", [2, 3])
@@ -311,7 +349,7 @@ def test_rollback_restores_the_previous_version(world: World) -> None:
     world.layout(2)
     world.run()
     outcome = world.heal(PatchProvider(load_patch(REPAIRS / "demo-v2.yaml")))
-    promote(world.state, outcome.proposals[0])
+    world.promote(outcome.proposals[0])
     assert world.run().status == "ok"
     back = rollback(world.state, "tenders-demo")
     assert back.version == 1
@@ -324,7 +362,7 @@ def test_a_failure_of_an_older_version_is_not_repaired_again(world: World) -> No
     world.layout(2)
     failed = world.run()
     outcome = world.heal(PatchProvider(load_patch(REPAIRS / "demo-v2.yaml")))
-    promote(world.state, outcome.proposals[0])
+    world.promote(outcome.proposals[0])
     again = world.heal(PatchProvider(load_patch(REPAIRS / "demo-v2.yaml")), run_id=failed.run_id)
     assert again.status == "skipped" and "used v1" in again.message
 
@@ -350,7 +388,7 @@ def test_only_accepted_proposals_can_be_promoted(world: World) -> None:
     world.run()
     outcome = world.heal(PatchProvider(load_patch(BAD / "v2-empty.yaml")))
     with pytest.raises(ValueError, match="rejected, not accepted"):
-        promote(world.state, outcome.proposals[0])
+        world.promote(outcome.proposals[0])
 
 
 # --- the CLI ---------------------------------------------------------------------------------
@@ -360,13 +398,10 @@ runner = CliRunner()
 
 def cli_run(world: World, *args: str) -> Any:
     common = ["--db", str(world.db)]
+    if args[0] in ("run", "check", "heal", "promote"):
+        common += ["--snapshots", str(world.snapshot_dir)]
     if args[0] in ("run", "check", "heal"):
-        common += [
-            "--snapshots",
-            str(world.snapshot_dir),
-            "--start",
-            f"{world.site.base_url}/notices",
-        ]
+        common += ["--start", f"{world.site.base_url}/notices"]
     return runner.invoke(cli, [args[0], str(DEMO_SPEC), *args[1:], *common])
 
 
@@ -416,6 +451,62 @@ def test_cli_quarantine_heal_diff_promote_rollback(world: World, tmp_path: Path)
 
     back = cli_run(world, "rollback")
     assert back.exit_code == 0 and "v1 (file) is active again" in back.output
+
+
+def test_cli_promote_verifies_the_proposal_again(world: World) -> None:
+    # A proposal stored as accepted by an earlier, weaker gate: status reading the
+    # category (review attack 1b) passed when volatile fields only had to be present.
+    world.layout(2)
+    failed = world.run()
+    old_report = VerificationReport(
+        accepted=True, threshold=0.9, anchors=10, anchors_checked=10, fields={}
+    )
+    old = world.state.proposals.add(
+        "tenders-demo",
+        1,
+        failed.run_id,
+        "old-gate",
+        load_patch(BAD / "v2-status-reads-category.yaml"),
+        old_report,
+    )
+    refused = cli_run(world, "promote", str(old.id))
+    assert refused.exit_code == 3, refused.output
+    assert f"proposal {old.id} no longer passes verification" in refused.output
+    assert "status reproduces 0/10 anchor values" in refused.output
+    stored = world.state.proposals.get(old.id)
+    assert stored is not None and stored.status == "rejected"
+    assert stored.report.problems and not stored.report.accepted
+    active = world.state.specs.active("tenders-demo")
+    assert active is not None and active.version == 1
+
+
+def test_cli_promote_refuses_a_proposal_for_another_version(world: World) -> None:
+    world.layout(2)
+    world.run()
+    healed = cli_run(world, "heal", "--patch", str(REPAIRS / "demo-v2.yaml"))
+    assert "proposal 1 passed verification" in healed.output
+    world.state.specs.register(file_spec(version=2))  # someone edited the spec meanwhile
+
+    stale = cli_run(world, "promote", "1")
+    assert stale.exit_code == 1
+    assert "proposal 1 was made for v1, but v2 is active" in stale.output
+    assert "--force" in stale.output
+
+    forced = cli_run(world, "promote", "1", "--force")
+    assert forced.exit_code == 0, forced.output
+    assert "re-based onto v2" in forced.output and "v3 is now active" in forced.output
+    assert world.run().status == "ok"
+
+
+def test_promote_force_fails_if_the_patch_does_not_fit(world: World) -> None:
+    world.layout(2)
+    world.run()
+    outcome = world.heal(PatchProvider(load_patch(REPAIRS / "demo-v2.yaml")))
+    data = file_spec(version=2).model_dump(mode="json")
+    data["fetch"]["paginate"] = None  # the active version no longer paginates
+    world.state.specs.register(SourceSpec.model_validate(data))
+    with pytest.raises(PromotionRefused, match="does not fit v2: patch sets next_page"):
+        world.promote(outcome.proposals[0], force=True)
 
 
 def test_cli_errors(world: World, tmp_path: Path) -> None:

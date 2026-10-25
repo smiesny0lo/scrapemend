@@ -43,7 +43,8 @@ expect:
 heal:
   mode: propose           # off | propose | auto
   anchors: 10
-  threshold: 0.9
+  threshold: 1.0
+  volatile_match: 0.6
 ```
 
 How a run works:
@@ -60,13 +61,21 @@ How a run works:
 - `url`, the default, uses the detail page's URL and needs `item.follow`. URLs usually survive redesigns, which makes them a good key.
 - A field name also works, but that field must be `required: true`. `url` itself is reserved and can't be a field name.
 
+### Specs without detail pages
+
+Without `item.follow`, every field is read from the item on the listing page, and nothing else is fetched. `examples/sources/demo-listing.yaml` is such a spec for the demo site.
+
+- The key must be a field: every item's `url` is its listing page's URL, which many items share. Pick a field that identifies the item and survives redesigns, such as a reference number or the link to the item (a `url` field read with `::attr(href)`, which is never fetched).
+- Each record's `url` is the listing page it was found on.
+- Healing works as for any spec. To verify a repair, the gate finds each anchor's item by its key on the listing pages; an item that moved to another page since the good run is still found if the gate saw that page. See [verification](verification.md).
+
 ## Fields
 
 ```yaml
 deadline:
   type: date               # str (default), int, decimal, date, url
   required: true           # a record without it is invalid
-  volatile: false          # true: the value may legitimately change (prices, statuses)
+  volatile: false          # true: the value may legitimately change (prices, statuses); see heal.volatile_match
   date_format: "%d %b %Y"  # strptime format; type: date only
   normalize: [strip]       # strip, collapse_whitespace, lower, strip_currency
   null_values: ["N/A"]     # texts that mean "no value" (any case)
@@ -137,8 +146,11 @@ Details:
 
 The other settings:
 
-- **`heal.anchors`** is the number of known-good records kept for verifying repairs.
-- **`heal.threshold`** is the share of anchor values *every* field must reproduce for a repair to pass (default 0.9).
+- **`heal.anchors`** is the number of known-good records kept for verifying repairs. More anchors catch errors that affect fewer records.
+- **`heal.threshold`** is the share of anchor values *every* stable field must reproduce for a repair to pass (default 1.0: all of them). Anchor pages that fail to load don't count against it.
+- **`heal.volatile_match`** is the same for volatile fields (default 0.6): their values may have changed since the last good run, but most must still match.
+
+A repair can't change any of these settings. [Verification](verification.md) explains each check, and what it can't catch.
 
 ## Versions
 

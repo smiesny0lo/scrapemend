@@ -4,30 +4,36 @@ After every complete good run, the N valid records whose keys hash lowest become
 the source's anchors. Hashing makes the choice stable: the same items keep being
 picked run after run while they exist, so their values stay comparable, and the
 choice is spread over the whole site rather than the first page.
+
+The values of every valid record of that run are kept too, by key: a repair must
+reproduce them on whichever pages of the failed run were stored.
 """
 
 import hashlib
 import heapq
+import json
 import sqlite3
-from datetime import date
-from decimal import Decimal
+from collections.abc import Mapping
 
 from pydantic import BaseModel
 
-from scrapemend.extract import Value
+from scrapemend.extract import RecordResult
+from scrapemend.extract.normalize import Encoded, encode
 from scrapemend.pipeline import ValidatedRecord
 
-AnchorValue = str | int | None
+__all__ = [
+    "Anchor",
+    "AnchorPicker",
+    "AnchorStore",
+    "AnchorValue",
+    "KnownRecords",
+    "encode",
+    "key_of",
+    "split",
+]
 
-
-def encode(value: Value) -> AnchorValue:
-    """A value in the form it is stored and compared in: decimals normalized, so
-    566600.00 and 566600.0 agree, and dates in ISO format."""
-    if isinstance(value, Decimal):
-        return f"{value.normalize():f}"
-    if isinstance(value, date):
-        return value.isoformat()
-    return value
+AnchorValue = Encoded
+KnownRecords = Mapping[str, Mapping[str, AnchorValue]]  # key -> field -> value
 
 
 class Anchor(BaseModel):
@@ -52,7 +58,7 @@ class Anchor(BaseModel):
         )
 
 
-def key_of(record: ValidatedRecord, key_field: str) -> str | None:
+def key_of(record: RecordResult | ValidatedRecord, key_field: str) -> str | None:
     value = record.url if key_field == "url" else encode(record.record.get(key_field))
     return None if value is None else str(value)
 
@@ -62,23 +68,24 @@ def _rank(key: str) -> int:
 
 
 class AnchorPicker:
-    """Keeps the `n` valid records whose keys hash lowest, while records stream past."""
+    """Keeps the `n` valid records whose keys hash lowest, while records stream past,
+    and the values of every valid record."""
 
     def __init__(self, n: int, key_field: str, run_id: str) -> None:
         self.n = n
         self.key_field = key_field
         self.run_id = run_id
         self._heap: list[tuple[int, str, Anchor]] = []  # (-rank, key, anchor): a max-heap
-        self._keys: set[str] = set()
+        self._values: dict[str, dict[str, AnchorValue]] = {}
 
     def add(self, record: ValidatedRecord) -> None:
         if self.n == 0 or not record.valid:
             return
         key = key_of(record, self.key_field)
-        if key is None or key in self._keys:
+        if key is None or key in self._values:
             return
-        self._keys.add(key)
         anchor = Anchor.from_record(record, key, self.run_id)
+        self._values[key] = anchor.values
         heapq.heappush(self._heap, (-_rank(key), key, anchor))
         if len(self._heap) > self.n:
             heapq.heappop(self._heap)
@@ -87,17 +94,30 @@ class AnchorPicker:
         """Lowest hash first: the order anchors are shown to a repair provider in."""
         return [anchor for _, _, anchor in sorted(self._heap, reverse=True)]
 
+    def records(self) -> dict[str, dict[str, AnchorValue]]:
+        """The values of every valid record, by key, in the order they came."""
+        return self._values
+
 
 class AnchorStore:
     def __init__(self, db: sqlite3.Connection) -> None:
         self.db = db
 
-    def replace(self, source_id: str, anchors: list[Anchor]) -> None:
+    def replace(
+        self, source_id: str, anchors: list[Anchor], records: KnownRecords | None = None
+    ) -> None:
+        """Make these the source's anchors, and `records` the values of its last good
+        run's records. Both are replaced, so none are left from an older run."""
         with self.db:
             self.db.execute("DELETE FROM anchors WHERE source_id = ?", (source_id,))
             self.db.executemany(
                 "INSERT INTO anchors VALUES (?, ?, ?, ?)",
                 [(source_id, rank, a.key, a.model_dump_json()) for rank, a in enumerate(anchors)],
+            )
+            self.db.execute("DELETE FROM good_records WHERE source_id = ?", (source_id,))
+            self.db.executemany(
+                "INSERT INTO good_records VALUES (?, ?, ?)",
+                [(source_id, key, json.dumps(dict(v))) for key, v in (records or {}).items()],
             )
 
     def all(self, source_id: str) -> list[Anchor]:
@@ -105,6 +125,14 @@ class AnchorStore:
             "SELECT anchor FROM anchors WHERE source_id = ? ORDER BY rank", (source_id,)
         )
         return [Anchor.model_validate_json(row["anchor"]) for row in rows]
+
+    def records(self, source_id: str) -> dict[str, dict[str, AnchorValue]]:
+        """The values of the last good run's valid records, by key: empty if that run
+        is older than this table."""
+        rows = self.db.execute(
+            "SELECT key, fields FROM good_records WHERE source_id = ?", (source_id,)
+        )
+        return {row["key"]: json.loads(row["fields"]) for row in rows}
 
 
 def split(anchors: list[Anchor], shown: int) -> tuple[list[Anchor], list[Anchor]]:

@@ -83,13 +83,15 @@ heal: proposed: proposal 1 passed verification (heal.mode is propose)
   proposal 1 (...): passed, weakest field 100% of anchors, 10 other pages checked
 ```
 
-Every field reproduced the known values on all 10 anchor pages, and the repaired spec also produced plausible records on 10 pages no one had seen.
+Every field reproduced the known values on all 10 anchor pages, the repaired spec produced plausible records on 10 pages no one had seen, and its next-page link led through three listing pages of new notices.
 
 To see a rejection, try a repair that maps one field wrongly:
 
 ```sh
 scrapemend heal examples/sources/demo.yaml --patch tests/fixtures/repairs/v2-wrong-field.yaml
-#  problem: location reproduces 0/10 anchor values (needs 90%); expected 'Glenhollow', got 'Consulting'
+#  problem: location reproduces 0/10 anchor values (needs 100%); expected 'Glenhollow', got 'Consulting'
+#  problem: category and location read the same element on 10 of 10 anchor pages
+#  problem: location reads values the last good run never had on 20 of 20 pages (...)
 ```
 
 Nothing passed this time, so the source is quarantined again. Promoting the verified proposal 1 in the next step lifts that.
@@ -102,7 +104,7 @@ scrapemend diff examples/sources/demo.yaml 1
 scrapemend promote examples/sources/demo.yaml 1
 ```
 
-The repair is now spec **version 2**. The YAML file on disk is untouched: specs are versioned, never edited in place. `scrapemend versions examples/sources/demo.yaml` shows both versions.
+`promote` runs the verification gate once more before it changes anything. The repair is now spec **version 2**. The YAML file on disk is untouched: specs are versioned, never edited in place. `scrapemend versions examples/sources/demo.yaml` shows both versions.
 
 ## 7. Scrape again
 

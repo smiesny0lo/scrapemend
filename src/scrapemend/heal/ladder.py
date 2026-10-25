@@ -25,7 +25,7 @@ from scrapemend.events import Event, EventKind, Notifier
 from scrapemend.fetch import Fetcher
 from scrapemend.heal.anchors import Anchor, split
 from scrapemend.heal.context import RepairContext, examples, prune_document, spec_yaml
-from scrapemend.heal.pages import PageSource
+from scrapemend.heal.pages import Pages, PageSource
 from scrapemend.heal.proposals import Proposal
 from scrapemend.heal.providers import ProviderError, RepairProvider
 from scrapemend.heal.verify import FieldCheck, VerificationReport, verify
@@ -108,6 +108,7 @@ def heal(
         )
 
     baseline = state.runs.last_good(spec.id)
+    known = state.anchors.records(spec.id)
     pages = PageSource(
         snapshots, spec.id, failed.run_id, fetcher=fetcher, spec_version=spec.version
     )
@@ -129,7 +130,11 @@ def heal(
             report = _unusable(spec, anchors, f"the patch does not fit the spec: {e}")
         else:
             report = verify(
-                candidate, anchors, pages, baseline=baseline.summary if baseline else None
+                candidate,
+                anchors,
+                pages,
+                baseline=baseline.summary if baseline else None,
+                known=known,
             )
         proposal = state.proposals.add(
             spec.id, spec.version, failed.run_id, provider.name, patch, report
@@ -161,7 +166,7 @@ def heal(
 
     blocker = _auto_blocker(mode, failed, accepted)
     if blocker is None:
-        version = promote(state, accepted)
+        version = promote(state, accepted, pages)
         message = f"proposal {accepted.id} passed verification and is now v{version.version}"
         alert("repair_promoted", message)
         return HealOutcome(
@@ -186,22 +191,64 @@ def heal(
     )
 
 
-def promote(state: State, proposal: Proposal) -> SpecVersion:
-    """Store a verified proposal as a new spec version and make it active.
+class PromotionRefused(ValueError):
+    """A proposal can't be promoted: it isn't accepted, it was made for another
+    version than the active one, or it no longer passes verification."""
 
-    The patch is applied to the stored version it was made for, so a runtime
+    def __init__(self, message: str, report: VerificationReport | None = None) -> None:
+        super().__init__(message)
+        self.report = report  # set when verifying it again failed
+
+
+def promote(state: State, proposal: Proposal, pages: Pages, *, force: bool = False) -> SpecVersion:
+    """Verify an accepted proposal again and store it as the new active spec version.
+
+    It is verified again against the current anchors on `pages` (the failed run's,
+    see PageSource), because the anchors or the gate may have changed since it was
+    accepted. It must have been made for the active version; with `force`, a
+    proposal made for an older one is applied to the active version instead, and
+    verified like that. The patch is applied to a stored version, so a runtime
     override (like --start) never leaks into the stored spec.
     """
+    source_id = proposal.source_id
     if proposal.status != "accepted":
-        raise ValueError(f"proposal {proposal.id} is {proposal.status}, not accepted")
-    base = state.specs.get(proposal.source_id, proposal.base_version)
-    if base is None:
-        raise ValueError(f"{proposal.source_id} v{proposal.base_version} is not stored")
-    version = state.specs.next_version(proposal.source_id)
-    spec = proposal.patch.apply(base.spec, version)
-    note = f"proposal {proposal.id} by {proposal.provider}: {proposal.patch.rationale}".strip()
-    stored = state.specs.add(spec, "repair", note[:500])
-    state.specs.activate(proposal.source_id, version)
+        raise PromotionRefused(f"proposal {proposal.id} is {proposal.status}, not accepted")
+    active = state.specs.active(source_id)
+    if active is None:
+        raise PromotionRefused(f"{source_id} has no spec versions")
+    rebased = active.version != proposal.base_version
+    if rebased and not force:
+        raise PromotionRefused(
+            f"proposal {proposal.id} was made for v{proposal.base_version}, but "
+            f"v{active.version} is active: run heal again, or pass --force to apply it to "
+            f"v{active.version} instead (it is verified again either way)"
+        )
+    version = state.specs.next_version(source_id)
+    try:
+        spec = proposal.patch.apply(active.spec, version)
+    except ValueError as e:
+        raise PromotionRefused(
+            f"proposal {proposal.id} does not fit v{active.version}: {e}"
+        ) from None
+    baseline = state.runs.last_good(source_id)
+    report = verify(
+        spec,
+        state.anchors.all(source_id),
+        pages,
+        baseline=baseline.summary if baseline else None,
+        known=state.anchors.records(source_id),
+    )
+    state.proposals.reverified(proposal.id, report)
+    if not report.accepted:
+        raise PromotionRefused(
+            f"proposal {proposal.id} no longer passes verification: "
+            + "; ".join(report.problems[:3]),
+            report,
+        )
+    onto = f", re-based onto v{active.version}" if rebased else ""
+    note = f"proposal {proposal.id} by {proposal.provider}{onto}: {proposal.patch.rationale}"
+    stored = state.specs.add(spec, "repair", note.strip()[:500])
+    state.specs.activate(source_id, version)
     state.proposals.mark_promoted(proposal.id, version)
     return stored
 
@@ -241,7 +288,8 @@ def build_context(
     listings = pages.listing_pages()
     example = shown[0] if shown else None
     old_detail = new_detail = None
-    if example is not None and example.url:
+    # Without item.follow there are no detail pages; an anchor's URL is a listing page.
+    if example is not None and example.url and spec.item.follow is not None:
         if example.snapshot_id:
             with suppress(KeyError):  # the old snapshot may have been cleaned up
                 old_detail = prune_document(snapshots.get(example.snapshot_id).document())

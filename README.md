@@ -1,6 +1,6 @@
 # scrapemend
 
-**A self-healing scraper engine for Python.** When a website changes its layout, scrapemend notices, names what broke, gets a repaired spec (from Claude, a plugin, or you), **proves the repair against known-good records**, and only then puts it to work.
+**A self-healing scraper engine for Python.** When a website changes its layout, scrapemend notices, names what broke, gets a repaired spec (from Claude, a plugin, or you), **checks the repair against known-good records**, and only then puts it to work.
 
 ```
 scrape v1 ──> site redesigned ──> layout_changed: title, category, ... broken
@@ -19,7 +19,7 @@ pip install -e ".[demo]"
 python examples/run_demo.py
 ```
 
-It starts a local demo site and scrapes it, then redesigns the site underneath the scraper and lets scrapemend heal. It takes about 30 seconds:
+It starts a local demo site and scrapes it, then redesigns the site underneath the scraper and lets scrapemend heal. It takes about 30 seconds, and CI runs it on Linux and Windows on every push:
 
 ```
 == 1. The demo site is up at http://127.0.0.1:52130. Scrape it with examples/sources/demo.yaml
@@ -62,8 +62,8 @@ For the same story one command at a time, see [examples/demo.md](examples/demo.m
 1. **Scrape.** Each field lists several strategies (css, xpath, label, regex, or a plugin's). The first one whose text converts to the field's type wins. Every downloaded page is kept as a snapshot.
 2. **Detect.** Every run is compared with the last good one, using page-structure fingerprints, per-field empty rates, and which strategies won. The run is classified as `ok`, `drift`, `blocked`, `transient`, `layout_changed`, `empty` or `partial`.
 3. **Repair.** A provider proposes a patch: new selectors and strategies, nothing else. It can't change the start URL, the rate limit, field types or the checks.
-4. **Verify.** On pages under the new layout, every field must reproduce the known values of the **anchor** records, each field on its own. The provider saw three anchors; the rest are held out, so a repair that only memorised the examples fails. Other pages are checked for plausibility.
-5. **Promote or quarantine.** A verified repair becomes the next spec version, either automatically (`heal.mode: auto`, with structural evidence) or after `scrapemend promote`. If nothing passes, the source is quarantined and an alert goes out.
+4. **Verify.** On pages under the new layout, every field must reproduce the known values of the **anchor** records, each field on its own: stable fields on every anchor, volatile ones (prices, statuses) on most. The provider saw three anchors; the rest are held out, so a repair that only memorised the examples fails. Every record on the pages the failed run stored must reproduce the last good run's values too. Other pages are checked for plausibility, and the next-page link is followed for two pages. When the failed run stored few pages, the gate checks a sample, not every record: [what it can and can't catch](docs/verification.md#what-the-gate-can-and-cant-catch).
+5. **Promote or quarantine.** A verified repair becomes the next spec version, either automatically (`heal.mode: auto`, with structural evidence) or after `scrapemend promote`. If nothing passes, the source is quarantined and an alert goes to your notifiers (`--notify`).
 
 Blocks are never worked around. A 401/403, a robots.txt disallow or a bot-wall page stops the run as `blocked`. scrapemend respects robots.txt, keeps per-domain rate limits, backs off on 429/5xx, and sends an identifiable User-Agent.
 
@@ -106,7 +106,7 @@ Requires Python 3.13+.
 ```sh
 pip install -e ".[dev]"
 pre-commit install
-pytest                     # unit and integration tests, about a minute
+pytest                     # unit and integration tests, a minute or two
 ruff check . && ruff format .
 mypy                       # strict
 ```

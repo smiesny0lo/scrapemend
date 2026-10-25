@@ -1,0 +1,19 @@
+# Review attack 2a on layout v2: the correct repair, except that the next-page link is
+# the first pager link. On page 1 that is "Next"; on page 2 it is "Previous", back to
+# page 1. Only checking that page 1 has a next-page link let it pass.
+rationale: v2 renamed classes; new selectors.
+confidence: 0.9
+container: { css: "table.tender-table tr.tender-row" }
+follow: { css: "a.tender-link::attr(href)" }
+next_page: { css: "a.pager__link::attr(href)" }
+fields:
+  reference: { strategies: [{ css: "dd.tender__ref" }] }
+  title: { strategies: [{ css: "h1.tender__title" }] }
+  authority: { strategies: [{ css: "dd.tender__buyer" }] }
+  category: { strategies: [{ css: "dd.tender__category" }] }
+  location: { strategies: [{ css: "dd.tender__location" }] }
+  published: { strategies: [{ css: "dd.tender__published" }] }
+  deadline: { strategies: [{ css: "dd.tender__closing" }] }
+  value: { strategies: [{ css: "dd.tender__amount" }] }
+  status: { strategies: [{ css: "dd.tender__status" }] }
+  description: { strategies: [{ css: "div.tender__description p" }] }

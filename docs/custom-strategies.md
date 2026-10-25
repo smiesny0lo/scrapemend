@@ -70,9 +70,10 @@ no installed plugin provides the custom strategy 'jsonld'
 </script>
 ```
 
-It picks a value by its path (`offers.price`), optionally only from objects of one `@type`. It also skips broken JSON blocks rather than failing. `tests/unit/test_plugins.py` shows it running inside a spec, with a CSS fallback.
+It picks a value by its path (`offers.price`), optionally only from objects of one `@type`. It also skips broken JSON blocks rather than failing. `tests/unit/test_plugins.py` shows it as the first strategy of a field, with a CSS fallback.
 
 ## Keep in mind
 
-- Repair providers can't propose custom strategies: the anthropic provider's answer schema only includes the built-in ones. Your custom strategies stay as you wrote them, and a repair adds built-in strategies around them.
+- Repair providers can't propose custom strategies: the anthropic provider's answer schema only includes the built-in ones. A repair keeps yours in place and adds its strategies around them: a custom strategy listed before every built-in one stays first, any other comes after the repair's strategies. The verification gate runs custom strategies like any other.
+- The gate checks that no two fields read the same element where their values differ. It can only do that for a custom strategy that also has a `locate(doc)` method, returning the element it read the value from (or `None`).
 - Strategies must not fetch anything themselves. All requests go through the fetcher, which applies robots.txt and rate limits. If you need another document (a linked PDF, an API response), that's a fetcher or pipeline extension, not a strategy.

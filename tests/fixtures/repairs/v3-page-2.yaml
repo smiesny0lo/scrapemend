@@ -1,0 +1,21 @@
+# Review attack 3c on layout v3: the correct repair, except that the next-page link is
+# hard-coded to page 2. Page 1 has that link, so checking only page 1 let it pass; on
+# page 2 there is no link to page 2, and the crawl stops after two of ten pages.
+rationale: v3 merged fields into text lines; regexes and labels.
+confidence: 0.8
+container: { css: "div.grid > div.rounded-lg" }
+follow: { css: "h3 a::attr(href)" }
+next_page: { css: "a[href$='page=2']::attr(href)" }
+fields:
+  reference: { strategies: [{ regex: 'Ref\.\s*(TN-\d{4}-\d{4})' }] }
+  title: { strategies: [{ css: "div.max-w-3xl > h2" }] }
+  authority: { strategies: [{ label: Contracting authority }] }
+  category:
+    strategies: [{ regex: '^(.+?) · ', within: { css: "div.max-w-3xl > div:first-child" } }]
+  location:
+    strategies: [{ regex: ' · (.+)$', within: { css: "div.max-w-3xl > div:first-child" } }]
+  published: { strategies: [{ regex: 'Published (\d{1,2} \w{3} \d{4})' }] }
+  deadline: { strategies: [{ label: { text: Deadline, relation: after } }] }
+  value: { strategies: [{ regex: 'Estimated value:?\s*(€\s?[\d,.]+)' }] }
+  status: { strategies: [{ regex: 'Status:\s*(\w+)' }] }
+  description: { strategies: [{ xpath: "//div[@class='mt-6']/p" }] }
