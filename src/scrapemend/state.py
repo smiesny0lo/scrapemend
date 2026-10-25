@@ -36,6 +36,36 @@ CREATE TABLE IF NOT EXISTS anchors (
     anchor    TEXT NOT NULL,         -- the Anchor as JSON
     PRIMARY KEY (source_id, key)
 );
+
+CREATE TABLE IF NOT EXISTS spec_versions (
+    source_id  TEXT NOT NULL,
+    version    INTEGER NOT NULL,
+    spec       TEXT NOT NULL,        -- the SourceSpec as JSON
+    origin     TEXT NOT NULL,        -- file | repair
+    note       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (source_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS sources (
+    source_id         TEXT PRIMARY KEY,
+    active_version    INTEGER NOT NULL,
+    quarantine_reason TEXT,          -- set while a human needs to look at the source
+    changed_at        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS proposals (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id        TEXT NOT NULL,
+    base_version     INTEGER NOT NULL,
+    run_id           TEXT NOT NULL,  -- the failed run the repair is for
+    provider         TEXT NOT NULL,
+    patch            TEXT NOT NULL,  -- the SpecPatch as JSON
+    report           TEXT NOT NULL,  -- the VerificationReport as JSON
+    status           TEXT NOT NULL,  -- accepted | rejected | promoted
+    promoted_version INTEGER,
+    created_at       TEXT NOT NULL
+);
 """
 
 
@@ -43,13 +73,18 @@ class State:
     """All local state of one database file."""
 
     def __init__(self, path: str | Path) -> None:
+        # Imported here: those modules depend on much of the package, state.py on none.
         from scrapemend.heal.anchors import AnchorStore
+        from scrapemend.heal.proposals import ProposalStore
         from scrapemend.runs import RunStore
+        from scrapemend.spec.store import SpecStore
 
         self.path = path
         self.db = connect(path)
         self.runs = RunStore(self.db)
         self.anchors = AnchorStore(self.db)
+        self.specs = SpecStore(self.db)
+        self.proposals = ProposalStore(self.db)
 
     def close(self) -> None:
         self.db.close()

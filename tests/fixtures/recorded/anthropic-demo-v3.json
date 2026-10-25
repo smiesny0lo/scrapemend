@@ -1,0 +1,171 @@
+{
+  "rationale": "The site moved from a table and definition-list layout to utility-class cards, so every selector had to be rebuilt by structure. Listing: each card is a direct child of div.grid, the follow link is the anchor in its h3, and the next-page link has aria-label 'Next page'. Detail page: the title is the h2. Category and location come from the first meta line ('Category · Location'). Reference, published date and status come from the meta line under the h2 ('Ref. X · Published D · Status: S'). The deadline is in the strong tag inside the slate box. The value is in the 'Estimated value:' paragraph; capturing its full remainder means 'Not disclosed' still maps to null. The authority is the font-semibold div in the border-t block. The description is the paragraph in the plain mt-6 div. Old label and regex strategies are kept as fallbacks.",
+  "confidence": 0.8,
+  "container": {
+    "css": "div.grid > div.border"
+  },
+  "follow": {
+    "css": "h3 a::attr(href)"
+  },
+  "next_page": {
+    "css": "a[aria-label='Next page']::attr(href)"
+  },
+  "fields": [
+    {
+      "name": "reference",
+      "strategies": [
+        {
+          "regex": "Ref\\.\\s*([A-Za-z0-9][A-Za-z0-9-]*)",
+          "within": {
+            "css": "div.max-w-3xl > h2 + div"
+          }
+        },
+        {
+          "regex": "Ref\\.\\s*([A-Z]{2}-\\d{4}-\\d+)",
+          "within": null
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "title",
+      "strategies": [
+        {
+          "css": "div.max-w-3xl > h2"
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "authority",
+      "strategies": [
+        {
+          "css": "div.border-t div.font-semibold"
+        },
+        {
+          "label": {
+            "text": "Contracting authority",
+            "relation": "next_sibling"
+          }
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "category",
+      "strategies": [
+        {
+          "regex": "^\\s*(.+?)\\s*·",
+          "within": {
+            "css": "div.max-w-3xl > div:first-child"
+          }
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "location",
+      "strategies": [
+        {
+          "regex": "·\\s*(.+?)\\s*$",
+          "within": {
+            "css": "div.max-w-3xl > div:first-child"
+          }
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "published",
+      "strategies": [
+        {
+          "regex": "Published\\s+(\\d{1,2} [A-Za-z]{3} \\d{4})",
+          "within": {
+            "css": "div.max-w-3xl > h2 + div"
+          }
+        },
+        {
+          "regex": "Published\\s+(\\d{1,2} [A-Za-z]{3} \\d{4})",
+          "within": null
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "deadline",
+      "strategies": [
+        {
+          "css": "div.bg-slate-50 p.text-lg strong"
+        },
+        {
+          "label": {
+            "text": "Deadline",
+            "relation": "after"
+          }
+        },
+        {
+          "regex": "Deadline:?\\s*(\\d{1,2} [A-Za-z]{3} \\d{4})",
+          "within": null
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "value",
+      "strategies": [
+        {
+          "regex": "Estimated value:?\\s*(.+?)\\s*$",
+          "within": {
+            "css": "div.bg-slate-50 p.mt-2"
+          }
+        },
+        {
+          "regex": "Estimated value:?\\s*(€\\s?[\\d,.]+)",
+          "within": null
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "status",
+      "strategies": [
+        {
+          "regex": "Status:\\s*(.+?)\\s*$",
+          "within": {
+            "css": "div.max-w-3xl > h2 + div"
+          }
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "description",
+      "strategies": [
+        {
+          "css": "div.max-w-3xl > div.mt-6:not(.bg-slate-50):not(.border-t) > p"
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    }
+  ]
+}

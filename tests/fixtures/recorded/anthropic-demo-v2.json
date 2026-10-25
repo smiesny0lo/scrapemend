@@ -1,0 +1,198 @@
+{
+  "rationale": "The listing table now uses tr.tender-row rows, with a.tender-link links in each row and an a[rel=next] link in nav.pager. The detail page now uses BEM classes: the title is in h1.tender__title, reference in dd.tender__ref, authority in dd.tender__buyer, category in dd.tender__category and the description in .tender__description .rich-text. The remaining meta rows are hidden in the pruned HTML, so their class names are unknown. They still use dt/dd pairs inside div.meta-row, so those fields use label next_sibling strategies. Existing working strategies are kept as fallbacks.",
+  "confidence": 0.85,
+  "container": {
+    "css": "table.tender-table tr.tender-row"
+  },
+  "follow": {
+    "css": "td.col-name a.tender-link::attr(href)"
+  },
+  "next_page": {
+    "css": "nav.pager a[rel=\"next\"]::attr(href)"
+  },
+  "fields": [
+    {
+      "name": "reference",
+      "strategies": [
+        {
+          "css": "dd.tender__ref"
+        },
+        {
+          "label": {
+            "text": "Reference",
+            "relation": "next_sibling"
+          }
+        },
+        {
+          "css": "dd.reference"
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "title",
+      "strategies": [
+        {
+          "css": "h1.tender__title"
+        },
+        {
+          "css": "div.tender__header h1"
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "authority",
+      "strategies": [
+        {
+          "css": "dd.tender__buyer"
+        },
+        {
+          "label": {
+            "text": "Contracting authority",
+            "relation": "next_sibling"
+          }
+        },
+        {
+          "css": "dd.authority"
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "category",
+      "strategies": [
+        {
+          "css": "dd.tender__category"
+        },
+        {
+          "label": {
+            "text": "Category",
+            "relation": "next_sibling"
+          }
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "location",
+      "strategies": [
+        {
+          "label": {
+            "text": "Location",
+            "relation": "next_sibling"
+          }
+        },
+        {
+          "css": "dd.tender__location"
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "published",
+      "strategies": [
+        {
+          "label": {
+            "text": "Published",
+            "relation": "next_sibling"
+          }
+        },
+        {
+          "css": "dd.tender__published"
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "deadline",
+      "strategies": [
+        {
+          "label": {
+            "text": "Deadline",
+            "relation": "next_sibling"
+          }
+        },
+        {
+          "css": "dd.tender__deadline"
+        },
+        {
+          "css": "dd.deadline"
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "value",
+      "strategies": [
+        {
+          "label": {
+            "text": "Estimated value",
+            "relation": "next_sibling"
+          }
+        },
+        {
+          "css": "dd.tender__value"
+        },
+        {
+          "regex": "Estimated value:?\\s*(€\\s?[\\d,.]+)",
+          "within": {
+            "css": "dl.tender__meta"
+          }
+        },
+        {
+          "regex": "Estimated value:?\\s*(€\\s?[\\d,.]+)",
+          "within": null
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "status",
+      "strategies": [
+        {
+          "label": {
+            "text": "Status",
+            "relation": "next_sibling"
+          }
+        },
+        {
+          "css": "dd.tender__status"
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    },
+    {
+      "name": "description",
+      "strategies": [
+        {
+          "css": "div.tender__description div.rich-text p"
+        },
+        {
+          "css": "div.tender__description div.rich-text"
+        }
+      ],
+      "normalize": null,
+      "date_format": null,
+      "null_values": null
+    }
+  ]
+}
