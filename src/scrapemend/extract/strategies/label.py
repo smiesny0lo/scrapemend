@@ -29,21 +29,30 @@ class LabelStrategy:
         self._prefix = re.compile(rf"{words}(?!\w){_SEPARATORS}(.*)", re.IGNORECASE | re.DOTALL)
 
     def extract(self, doc: Document) -> str | None:
+        found = self._find(doc)
+        return found[1] if found else None
+
+    def locate(self, doc: Document) -> HtmlElement | None:
+        """The element the value is read from: the label's sibling, or the line of text."""
+        found = self._find(doc)
+        return found[0] if found else None
+
+    def _find(self, doc: Document) -> tuple[HtmlElement, str] | None:
         if self.spec.label.relation == "next_sibling":
             return self._next_sibling(doc)
         return self._after(doc)
 
-    def _next_sibling(self, doc: Document) -> str | None:
+    def _next_sibling(self, doc: Document) -> tuple[HtmlElement, str] | None:
         # Document order visits outer elements first, so <div><span>Deadline</span></div>
         # tries the div's sibling before the span's.
         for element in doc.elements():
             if self._whole.fullmatch(text_of(element)):
                 sibling = _next_visible_sibling(element)
                 if sibling is not None and (value := text_of(sibling)):
-                    return value
+                    return sibling, value
         return None
 
-    def _after(self, doc: Document) -> str | None:
+    def _after(self, doc: Document) -> tuple[HtmlElement, str] | None:
         # Only single lines of text count: a <dl> or <div> of blocks can also start
         # with the label, but "the rest of it" would be every field that follows.
         for element in doc.elements():
@@ -51,7 +60,7 @@ class LabelStrategy:
                 continue
             match = self._prefix.match(text_of(element))
             if match and match.group(1):
-                return match.group(1)
+                return element, match.group(1)
         return None
 
 

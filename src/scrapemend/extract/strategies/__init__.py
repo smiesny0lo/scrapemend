@@ -4,7 +4,7 @@ from collections.abc import Callable
 from importlib.metadata import entry_points
 from typing import Any, assert_never
 
-from scrapemend.extract.strategies.base import Strategy
+from scrapemend.extract.strategies.base import Locating, Strategy
 from scrapemend.extract.strategies.css import CssStrategy
 from scrapemend.extract.strategies.label import LabelStrategy
 from scrapemend.extract.strategies.regex import RegexStrategy
@@ -62,6 +62,7 @@ def _factory(name: str) -> StrategyFactory:
 __all__ = [
     "CssStrategy",
     "LabelStrategy",
+    "Locating",
     "RegexStrategy",
     "Strategy",
     "StrategyFactory",

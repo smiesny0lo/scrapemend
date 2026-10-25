@@ -7,8 +7,9 @@ import pytest
 from scrapemend.extract import Document
 from scrapemend.heal.anchors import Anchor
 from scrapemend.heal.verify import verify
-from scrapemend.pipeline import RunSummary
+from scrapemend.pipeline import FieldStats, RunSummary
 from scrapemend.spec import SourceSpec
+from scrapemend.spec.models import HealSpec
 
 BASE = "https://example.org"
 
@@ -87,7 +88,8 @@ BASELINE = RunSummary(source_id="demo", spec_version=1, run_id="good", listing_p
 
 def run(candidate: SourceSpec, pages: FakePages | None = None, **kwargs: Any) -> Any:
     pages = pages or FakePages(DETAILS, listing_for(URLS))
-    return verify(candidate, kwargs.pop("anchors", ANCHORS), pages, baseline=BASELINE, **kwargs)
+    anchors = kwargs.pop("anchors", ANCHORS)
+    return verify(candidate, anchors, pages, baseline=kwargs.pop("baseline", BASELINE), **kwargs)
 
 
 def test_a_working_spec_is_accepted() -> None:
@@ -97,11 +99,102 @@ def test_a_working_spec_is_accepted() -> None:
     assert report.score == 1.0
 
 
-def test_volatile_fields_only_need_to_be_present() -> None:
+def new_price(html: str) -> str:
+    return html.replace("<p class='price'>", "<p class='price'>9")
+
+
+def test_volatile_field_reading_something_else_is_rejected() -> None:
+    # This replaces test_volatile_fields_only_need_to_be_present, which accepted it:
+    # a volatile field only had to have a value where it used to, so a strategy
+    # reading another element passed at 100%.
+    changed = {u: new_price(html) for u, html in DETAILS.items()}
+    report = run(spec(), FakePages(changed, listing_for(URLS)))
+    assert not report.accepted
+    assert report.fields["price"].matched == 0
+    assert report.problems[0].startswith(
+        "price reproduces 0/10 anchor values (needs 60% for a volatile field)"
+    )
+
+
+def test_volatile_values_that_really_changed_are_accepted() -> None:
+    # Two of the ten anchors have a new price since the last good run. Most still
+    # match exactly, so a correct repair passes.
     changed = {
-        u: html.replace("<p class='price'>", "<p class='price'>9") for u, html in DETAILS.items()
+        u: new_price(html) if i in (3, 7) else html for i, (u, html) in enumerate(DETAILS.items())
     }
-    assert run(spec(), FakePages(changed, listing_for(URLS))).accepted
+    report = run(spec(), FakePages(changed, listing_for(URLS)))
+    assert report.accepted, report.problems
+    assert report.fields["price"].rate == 0.8
+
+
+def test_volatile_match_is_configurable() -> None:
+    changed = {u: new_price(html) if i < 5 else html for i, (u, html) in enumerate(DETAILS.items())}
+    strict = spec().model_copy(update={"heal": HealSpec(volatile_match=0.6)})
+    lenient = spec().model_copy(update={"heal": HealSpec(volatile_match=0.5)})
+    assert not run(strict, FakePages(changed, listing_for(URLS))).accepted
+    assert run(lenient, FakePages(changed, listing_for(URLS))).accepted
+
+
+def test_two_fields_reading_one_element_are_rejected() -> None:
+    # region is volatile, and on seven anchors its known value equals the city, so
+    # reading the city element reproduces 7/10: enough for a volatile field. On the
+    # other three, the two known values differ, yet both fields read one element.
+    regions = [f"City {i % 4}" if i < 7 else "Elsewhere" for i in range(10)]
+    anchors = [
+        a.model_copy(update={"values": a.values | {"region": region}})
+        for a, region in zip(ANCHORS, regions, strict=True)
+    ]
+    candidate = spec(region={"volatile": True, "strategies": [{"css": ".city"}]})
+    report = run(candidate, anchors=anchors)
+    assert report.fields["region"].rate == 0.7
+    assert report.problems == ["city and region read the same element on 3 of 10 anchor pages"]
+
+
+def test_a_field_may_read_part_of_an_element_another_field_reads() -> None:
+    # "City 1 · North": two fields, one element, different text. That is fine.
+    pages = {u: html.replace("</p>", " · North</p>", 1) for u, html in DETAILS.items()}
+    anchors = [a.model_copy(update={"values": a.values | {"side": "North"}}) for a in ANCHORS]
+    candidate = spec(
+        city={"strategies": [{"regex": "^(.+?) · ", "within": {"css": ".city"}}]},
+        side={"strategies": [{"regex": " · (.+)$", "within": {"css": ".city"}}]},
+    )
+    report = run(candidate, FakePages(pages, listing_for(URLS)), anchors=anchors)
+    assert report.accepted, report.problems
+
+
+def status_pages(read: str) -> dict[str, str]:
+    """Detail pages with a status (Open or Closed) and a kind of work."""
+    return {
+        u: html + f"<p class='status'>{'Open' if i % 3 else 'Closed'}</p><p class='kind'>{read}</p>"
+        for i, (u, html) in enumerate(DETAILS.items())
+    }
+
+
+def with_statuses(*known: str, filled: int = 30) -> RunSummary:
+    stats = FieldStats(filled=filled, domain=list(known))
+    return BASELINE.model_copy(update={"fields": {"status": stats}})
+
+
+def test_a_field_with_few_values_must_keep_reading_them() -> None:
+    # status took two values in the last good run. The anchors were kept before it
+    # existed, so they hold no status to compare; the gate still sees that the new
+    # strategy reads values status never had.
+    candidate = spec(status={"volatile": True, "strategies": [{"css": ".kind"}]})
+    pages = FakePages(status_pages("Works"), listing_for(URLS))
+    report = run(candidate, pages, baseline=with_statuses("Open", "Closed"))
+    assert report.problems == [
+        "status reads values the last good run never had on 20 of 20 pages "
+        "(e.g. 'Works'; it had: Closed, Open)"
+    ]
+
+
+def test_new_values_now_and_then_are_fine() -> None:
+    candidate = spec(status={"volatile": True, "strategies": [{"css": ".status"}]})
+    pages = FakePages(status_pages("Works"), listing_for(URLS))
+    # "Closed" is new since the last good run, on a third of the pages.
+    assert run(candidate, pages, baseline=with_statuses("Open")).accepted
+    # Too few repeats to call it a small set of values: no check.
+    assert run(candidate, pages, baseline=with_statuses("Pending", filled=2)).accepted
 
 
 def test_volatile_field_gone_is_a_mismatch() -> None:

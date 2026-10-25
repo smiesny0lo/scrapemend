@@ -128,9 +128,27 @@ def test_wrong_field_mapped_is_rejected(broken: Broken) -> None:
     report = broken.check(load_patch(BAD / fixture))
     assert not report.accepted
     assert report.fields[field].matched == 0
-    assert [p.split(" ")[0] for p in report.problems] == [field]
+    # Every problem is about that field (it also reads another field's element).
+    assert report.problems[0].startswith(f"{field} reproduces 0/10 anchor values")
+    assert all(field in p for p in report.problems), report.problems
     others = {name: check.rate for name, check in report.fields.items() if name != field}
     assert set(others.values()) == {1.0}  # everything else is right: it really is subtle
+
+
+def test_volatile_field_reading_another_field_is_rejected(broken: Broken) -> None:
+    # Review attack 1b: status (volatile) reads the category. All three volatile
+    # rules catch it: exact matches, the values status takes, the shared element.
+    report = broken.check(load_patch(BAD / f"v{layout(broken)}-status-reads-category.yaml"))
+    assert not report.accepted
+    assert report.fields["status"].matched == 0
+    assert set(report.problems) == {
+        f"status reproduces 0/10 anchor values (needs 60% for a volatile field); "
+        f"expected {broken.anchors[0].values['status']!r}, "
+        f"got {broken.anchors[0].values['category']!r}",
+        f"status reads values the last good run never had on 20 of 20 pages "
+        f"(e.g. {broken.anchors[0].values['category']!r}; it had: Awarded, Closed, Open)",
+        "category and status read the same element on 10 of 10 anchor pages",
+    }
 
 
 def test_empty_repair_is_rejected(broken: Broken) -> None:

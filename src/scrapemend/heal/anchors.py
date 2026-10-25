@@ -9,25 +9,15 @@ choice is spread over the whole site rather than the first page.
 import hashlib
 import heapq
 import sqlite3
-from datetime import date
-from decimal import Decimal
 
 from pydantic import BaseModel
 
-from scrapemend.extract import Value
+from scrapemend.extract.normalize import Encoded, encode
 from scrapemend.pipeline import ValidatedRecord
 
-AnchorValue = str | int | None
+__all__ = ["Anchor", "AnchorPicker", "AnchorStore", "AnchorValue", "encode", "key_of", "split"]
 
-
-def encode(value: Value) -> AnchorValue:
-    """A value in the form it is stored and compared in: decimals normalized, so
-    566600.00 and 566600.0 agree, and dates in ISO format."""
-    if isinstance(value, Decimal):
-        return f"{value.normalize():f}"
-    if isinstance(value, date):
-        return value.isoformat()
-    return value
+AnchorValue = Encoded
 
 
 class Anchor(BaseModel):

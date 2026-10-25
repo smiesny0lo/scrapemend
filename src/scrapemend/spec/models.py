@@ -253,6 +253,8 @@ class HealSpec(_Model):
     anchors: int = Field(default=10, ge=0)  # known-good records kept for verification
     # Share of anchor values every field must reproduce for a repair to be accepted.
     threshold: float = Field(default=0.9, gt=0, le=1)
+    # The same for volatile fields, whose values may have changed since: most must not.
+    volatile_match: float = Field(default=0.6, ge=0, le=1)
 
 
 # --- source ---------------------------------------------------------------------------
