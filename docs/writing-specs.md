@@ -45,6 +45,8 @@ heal:
   anchors: 10
   threshold: 1.0
   volatile_match: 0.6
+  volatile_change: 0.1
+  shadow_max_items: null  # null: the shadow run reads the whole source
 ```
 
 How a run works:
@@ -75,7 +77,7 @@ Without `item.follow`, every field is read from the item on the listing page, an
 deadline:
   type: date               # str (default), int, decimal, date, url
   required: true           # a record without it is invalid
-  volatile: false          # true: the value may legitimately change (prices, statuses); see heal.volatile_match
+  volatile: false          # true: the value may legitimately change (prices, statuses); see heal.volatile_change
   date_format: "%d %b %Y"  # strptime format; type: date only
   normalize: [strip]       # strip, collapse_whitespace, lower, strip_currency
   null_values: ["N/A"]     # texts that mean "no value" (any case)
@@ -117,6 +119,7 @@ Details:
   - `{text: Deadline, relation: after}`: the rest of a *single line of text* that starts with the label, as in `<p>Deadline: 3 Nov</p>` or `<p><b>Deadline</b> 3 Nov</p>`.
 
   Labels match case-insensitively, ignoring extra spaces and a trailing colon.
+- **`regex`** runs on Python's `re` by default, with each search stopped after a second. With `engine: re2` it runs on RE2, which is linear in the text but has no backreferences or lookarounds, and whose `\w`, `\d` and `\s` match ASCII only. A repair proposed by a provider always gets `engine: re2` (see [verification](verification.md#regexes)).
 - **`regex`** can search one element instead of the whole page. That's much safer when a line holds several values:
 
   ```yaml
@@ -140,15 +143,17 @@ Details:
 - **`off`:** report only.
 - **`propose`** (the default): a repair that passes verification waits for `scrapemend promote`.
 - **`auto`:** a repair is promoted at once, provided three things hold:
-  - it passed verification;
+  - it passed every check of the verification (one that couldn't run is never promoted automatically);
   - the failure carries structural evidence (the page fingerprint changed);
   - the repair's confidence is at least 0.5.
 
 The other settings:
 
 - **`heal.anchors`** is the number of known-good records kept for verifying repairs. More anchors catch errors that affect fewer records.
-- **`heal.threshold`** is the share of anchor values *every* stable field must reproduce for a repair to pass (default 1.0: all of them). Anchor pages that fail to load don't count against it.
-- **`heal.volatile_match`** is the same for volatile fields (default 0.6): their values may have changed since the last good run, but most must still match.
+- **`heal.threshold`** is the share of anchor values *every* stable field must reproduce for a repair to pass (default 1.0: all of them), and the share of the shadow run's records it must read exactly as the last good run did. Anchor pages that fail to load don't count against it.
+- **`heal.volatile_match`** is the same for volatile fields on the anchors (default 0.6): their values may have changed since the last good run, but most must still match.
+- **`heal.volatile_change`** is the share of the shadow run's records on which a volatile field's value may have changed (default 0.1). A value that became empty never counts as a change.
+- **`heal.shadow_max_items`** caps the records the shadow run reads, for a large source (default: none, the whole source; at least 20). It then reads a sample, drawn at random with a fixed seed from listing pages across the whole source, and catches a field wrong on a few records only with some probability.
 
 A repair can't change any of these settings. [Verification](verification.md) explains each check, and what it can't catch.
 

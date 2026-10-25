@@ -8,10 +8,10 @@
 | `scrapemend run SPEC [--out FILE]` | scrape with the active spec version, write JSON lines, judge the run, heal per `heal.mode` |
 | `scrapemend check SPEC [--sample 5]` | scrape a small sample and judge it; writes no records, never changes the baseline, never heals |
 | `scrapemend runs [SOURCE_ID]` | run history, newest first |
-| `scrapemend heal SPEC [--provider P \| --patch FILE]` | repair the latest failed run, verify the repair, promote it or leave it for review |
+| `scrapemend heal SPEC [--provider P \| --patch FILE]` | repair the latest failed run, verify the repair (with a shadow run over the source), promote it or leave it for review |
 | `scrapemend proposals SPEC` | repair proposals with their verification score |
 | `scrapemend diff SPEC ID` | what proposal ID would change, as a diff of the spec |
-| `scrapemend promote SPEC ID [--force]` | verify proposal ID again and make it the active version; a proposal made for another version than the active one is refused, unless `--force` applies it to the active version (verified again too) |
+| `scrapemend promote SPEC ID [--force]` | verify proposal ID again and make it the active version. `--force` promotes it when a check couldn't run (never when one failed), and applies a proposal made for another version than the active one to the active version (verified again too) |
 | `scrapemend rollback SPEC [--to N]` | make an older version active again |
 | `scrapemend versions SPEC` / `show SPEC` | stored versions / one version as YAML |
 
@@ -39,7 +39,7 @@ Every run is compared with the **last good run**, the latest complete run whose 
 | Status | Signal | Exit code |
 |---|---|---|
 | `ok` | nothing wrong | 0 |
-| `drift` | the data parses, but its shape shifted (item count, empty fields); alert only, never repaired | 0 |
+| `drift` | the data parses, but is distributed unlike the last good run's: far fewer or more records, a field's empty rate moved by more than 5 points, a value of a small set (a status) that 5% of records had is gone, or numbers changed magnitude; alert only, never repaired | 0 |
 | `blocked` | 401/403, robots.txt disallows, or a bot-wall page; the run stops and nothing tries to get around it | 2 |
 | `transient` | timeouts, 5xx or 429 that outlasted the retries | 2 |
 | `layout_changed` | the page structure changed (fingerprints) and extraction fails | 3 |
@@ -97,7 +97,7 @@ scrapemend has no scheduler. Run it from cron, a systemd timer or a CI schedule,
 
 ## Quarantine
 
-When a run fails, the healing ladder gets a chance. If no repair passes verification, or no provider is configured, the source is **quarantined**:
+When a run fails, the healing ladder gets a chance. If no repair passes verification, a repair couldn't be fully verified (a page wouldn't load, for example), or no provider is configured, the source is **quarantined**:
 
 - `scrapemend run` refuses it with exit code 3, unless you pass `--force`.
 - `scrapemend check` still works.

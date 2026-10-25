@@ -79,22 +79,40 @@ scrapemend heal examples/sources/demo.yaml --provider anthropic
 Either way, the repair goes through the verification gate before anything changes:
 
 ```
-heal: proposed: proposal 1 passed verification (heal.mode is propose)
-  proposal 1 (...): passed, weakest field 100% of anchors, 10 other pages checked
+heal: proposed: proposal 1 passed verification (heal.mode is propose); promote it with: scrapemend promote <spec> 1
+  proposal 1 (patch:demo-v2.yaml, confidence 0.90): passed
+    passed   regexes: 1 regex: 1 on Python's re (at most 1s a search)
+    passed   listing: 20 items on the first listing page, 3 listing pages along the next-page link
+    passed   anchors: 10 of 10 anchor pages compared; weakest field 100%
+    passed   sample: 10 other pages
+    passed   known values: category, location, status on 20 pages
+    passed   shadow run: the whole source: 10 listing pages, 200 records; all 200 of the last good run's records compared
 ```
 
-Every field reproduced the known values on all 10 anchor pages, the repaired spec produced plausible records on 10 pages no one had seen, and its next-page link led through three listing pages of new notices.
+Every field reproduced the known values on all 10 anchor pages, and the next-page link led through three listing pages of new notices. Then the **shadow run**: the repaired spec crawled the whole site, about 200 requests at the spec's rate limit, and read every one of the 200 notices exactly as the good run had. The pages it fetched are stored, so `promote` needs none of them again.
 
 To see a rejection, try a repair that maps one field wrongly:
 
 ```sh
 scrapemend heal examples/sources/demo.yaml --patch tests/fixtures/repairs/v2-wrong-field.yaml
-#  problem: location reproduces 0/10 anchor values (needs 100%); expected 'Glenhollow', got 'Consulting'
-#  problem: category and location read the same element on 10 of 10 anchor pages
-#  problem: location reads values the last good run never had on 20 of 20 pages (...)
+#    failed   anchors: 10 of 10 anchor pages compared; weakest field 0%
+#      problem: location reproduces 0/10 anchor values (needs 100%); expected 'Ravensholm', got 'Energy'
+#      problem: category and location read the same element on 10 of 10 anchor pages
+#    ...
+#    not run  shadow run: skipped: a quicker check failed
 ```
 
-Nothing passed this time, so the source is quarantined again. Promoting the verified proposal 1 in the next step lifts that.
+Or one that is right on most notices: its `status` regex only knows the values Open and Closed, so it passes on the anchors and fails in the shadow run.
+
+```sh
+scrapemend heal examples/sources/demo.yaml --patch tests/fixtures/repairs/v2-status-enumerates-examples.yaml
+#    passed   anchors: 10 of 10 anchor pages compared; weakest field 60%
+#    ...
+#    failed   shadow run: the whole source: 10 listing pages, 200 records; all 200 of the last good run's records compared
+#      problem: status became empty on 39 of 200 records that had a value in the last good run (a volatile field may change, but not become empty); expected 'Awarded', got None
+```
+
+Nothing passed these times, so the source is quarantined again. Promoting the verified proposal 1 in the next step lifts that.
 
 ## 6. Review and promote
 
@@ -104,7 +122,7 @@ scrapemend diff examples/sources/demo.yaml 1
 scrapemend promote examples/sources/demo.yaml 1
 ```
 
-`promote` runs the verification gate once more before it changes anything. The repair is now spec **version 2**. The YAML file on disk is untouched: specs are versioned, never edited in place. `scrapemend versions examples/sources/demo.yaml` shows both versions.
+`promote` runs the verification gate once more before it changes anything, on the pages `heal` stored. The repair is now spec **version 2**. The YAML file on disk is untouched: specs are versioned, never edited in place. `scrapemend versions examples/sources/demo.yaml` shows both versions.
 
 ## 7. Scrape again
 

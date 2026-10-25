@@ -125,18 +125,12 @@ class SpecStore:
             )
 
     def quarantine(self, source_id: str, reason: str) -> None:
-        """Mark a source as needing a human: its spec is broken and no repair passed."""
+        """Mark a source as needing a human: its spec is broken and no repair passed.
+        Activating a version (a promotion, a rollback, a new spec file) ends it."""
         with self.db:
             self.db.execute(
                 "UPDATE sources SET quarantine_reason = ?, changed_at = ? WHERE source_id = ?",
                 (reason, datetime.now(UTC).isoformat(), source_id),
-            )
-
-    def release(self, source_id: str) -> None:
-        with self.db:
-            self.db.execute(
-                "UPDATE sources SET quarantine_reason = NULL, changed_at = ? WHERE source_id = ?",
-                (datetime.now(UTC).isoformat(), source_id),
             )
 
 

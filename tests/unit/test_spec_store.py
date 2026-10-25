@@ -71,15 +71,17 @@ def test_activate_unknown_version(store: SpecStore) -> None:
         store.activate("tenders-demo", 5)
 
 
-def test_quarantine_until_released_or_a_version_is_activated(store: SpecStore) -> None:
+def test_quarantine_until_a_version_is_activated(store: SpecStore) -> None:
+    # Replaces test_quarantine_until_released_or_a_version_is_activated: release() was
+    # never called (promote, rollback and a new spec file all activate a version).
     store.register(DEMO)
     store.quarantine("tenders-demo", "no repair passed")
     state = store.state("tenders-demo")
     assert state is not None and state.quarantine_reason == "no repair passed"
-    store.release("tenders-demo")
+    store.activate("tenders-demo", 1)  # like a rollback to v1
     state = store.state("tenders-demo")
     assert state is not None and state.quarantine_reason is None
     store.quarantine("tenders-demo", "again")
-    store.activate("tenders-demo", 1)
+    store.register(variant(2, rps=2))  # a new spec file version
     state = store.state("tenders-demo")
-    assert state is not None and state.quarantine_reason is None
+    assert state is not None and (state.quarantine_reason, state.active_version) == (None, 2)
