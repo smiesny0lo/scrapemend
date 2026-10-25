@@ -226,7 +226,6 @@ class AnthropicProvider:
                 ) from None
             client = anthropic.Anthropic()
         self.client = client
-        self.last_usage: Any = None
 
     def request(self, context: RepairContext) -> dict[str, Any]:
         """The API request for a context (separate from sending it, for inspection)."""
@@ -257,7 +256,6 @@ class AnthropicProvider:
             if type(e).__module__.startswith("anthropic"):
                 raise ProviderError(f"Anthropic API error: {e}") from None
             raise
-        self.last_usage = getattr(response, "usage", None)
         if response.stop_reason == "refusal":
             details = getattr(response, "stop_details", None)
             category = getattr(details, "category", None)

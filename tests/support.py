@@ -36,7 +36,6 @@ class RecordedClaude:
             if self.stop_reason == "refusal"
             else None,
             parsed_output=answer,
-            usage=None,
         )
 
 

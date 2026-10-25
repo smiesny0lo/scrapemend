@@ -19,7 +19,7 @@ from scrapemend.extract.select import find_link, select_all
 from scrapemend.fetch import BlockedError, Fetcher, FetchError, TransientError
 from scrapemend.ids import new_run_id
 from scrapemend.snapshots import Snapshot, SnapshotKind, SnapshotStore
-from scrapemend.spec import FieldSpec, SourceSpec
+from scrapemend.spec import SourceSpec
 from scrapemend.validate import DISQUALIFYING, Violation, validate_record
 
 MAX_CONSECUTIVE_FAILURES = 5
@@ -139,17 +139,6 @@ class ValidatedRecord:
     @property
     def valid(self) -> bool:
         return not any(v.kind in DISQUALIFYING for v in self.violations)
-
-
-def tally(
-    records: Iterable[ValidatedRecord], fields: Mapping[str, FieldSpec]
-) -> dict[str, FieldStats]:
-    """Per-field statistics over some records."""
-    stats = {name: FieldStats() for name in fields}
-    for record in records:
-        for name, field in record.fields.items():
-            stats[name].add(field, (v for v in record.violations if v.field == name))
-    return stats
 
 
 @dataclass(frozen=True)

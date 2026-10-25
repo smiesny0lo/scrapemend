@@ -48,7 +48,7 @@ The provider sends Claude a **repair context**:
 - pruned HTML of a listing page and a detail page, before (when the spec worked) and now;
 - three of the anchors as examples.
 
-**Pruning** removes scripts, styles and comments, keeps only selector-relevant attributes, shortens long texts, and cuts repeated listing items down to three. A typical context is 7–8k tokens.
+**Pruning** removes scripts, styles and comments, keeps only selector-relevant attributes, shortens long texts, and cuts repeated listing items down to three.
 
 Claude answers with **structured output**: JSON constrained to a schema, which the SDK validates and scrapemend turns into a `SpecPatch` and validates again. If the gate rejects an attempt, its problems are sent back for a second try (`--attempts`, default 2). The unchanged context is served from the prompt cache.
 
@@ -58,7 +58,7 @@ Settings:
 - **Effort** is `high`.
 - **Refusal fallbacks** are enabled through the server-side fallback beta, so a safety decline is retried on a fallback model inside the same call.
 
-On the demo site, one repair takes 15–25 s and roughly 7.5k input and 2k output tokens, about $0.07–0.09 at Claude Opus 5.5 prices. In testing, Claude repaired both demo redesigns on the first attempt, with every field reproducing 10/10 anchor values. Those answers are recorded in `tests/fixtures/recorded/` and replayed in CI.
+In testing, Claude repaired both demo redesigns on the first attempt, with every field reproducing 10/10 anchor values. Those answers are recorded in `tests/fixtures/recorded/` and replayed in CI. scrapemend doesn't report token usage or cost per repair; your Anthropic Console shows both.
 
 **Untrusted input.** Page HTML comes from the scraped website. The prompt marks it as data and tells the model to ignore instructions inside it. The patch schema and the gate are the real defence: even a manipulated answer can only propose selectors and strategies, and those must reproduce the known values on the pages the gate checks (see [what the gate can and can't catch](verification.md#what-the-gate-can-and-cant-catch)).
 
