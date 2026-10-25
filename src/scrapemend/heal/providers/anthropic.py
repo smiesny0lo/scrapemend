@@ -127,6 +127,8 @@ element, as in <dt>Deadline</dt><dd>VALUE</dd>.
 with the label, as in <p>Deadline: VALUE</p> or <p>Deadline <b>VALUE</b></p>.
 - {regex: PATTERN, within: null}: searches the page's visible text; capture group 1 is the \
 value. With within: {css: ...} only that element's text is searched, which is much safer.
+- {custom: ...} strategies in the current spec come from plugins. You can't propose them; \
+they stay where they are, and the strategies you give for that field are added around them.
 container, follow and next_page take css or xpath only; follow and next_page must give URLs \
 (css without ::attr reads the href). Text is whitespace-collapsed, and text in separate block \
 elements is separated by a space. CSS is translated by cssselect: :nth-child, :not and :has \

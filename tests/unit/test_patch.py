@@ -4,8 +4,21 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from scrapemend.spec import CssSpec, LabelSpec, SpecError, load_patch, load_spec, parse_patch
+from scrapemend.heal.context import RepairContext
+from scrapemend.heal.providers.anthropic import AnthropicProvider
+from scrapemend.spec import (
+    CssSpec,
+    CustomSpec,
+    LabelSpec,
+    RegexSpec,
+    SourceSpec,
+    SpecError,
+    load_patch,
+    load_spec,
+    parse_patch,
+)
 from scrapemend.spec.patch import SpecPatch
+from tests.support import RecordedClaude, recorded
 
 ROOT = Path(__file__).parents[2]
 DEMO = load_spec(ROOT / "examples" / "sources" / "demo.yaml")
@@ -106,6 +119,61 @@ def test_empty_patch() -> None:
 def test_confidence_is_a_probability() -> None:
     with pytest.raises(ValidationError):
         patch(confidence=1.5)
+
+
+# --- custom strategies --------------------------------------------------------------------
+
+JSONLD = {"custom": {"name": "jsonld", "options": {"path": "offers.price"}}}
+CONTEXT = RepairContext(source_id="tenders-demo", spec_yaml="id: tenders-demo\n", failures=[])
+
+
+def with_customs() -> SourceSpec:
+    """The demo spec with a plugin strategy first for value, and last for title."""
+    data = DEMO.model_dump(mode="json")
+    data["fields"]["value"]["strategies"] = [JSONLD, {"css": "dd.value"}]
+    data["fields"]["title"]["strategies"] = [{"css": "h1.notice-title"}, {"custom": "headline"}]
+    return SourceSpec.model_validate(data)
+
+
+def test_custom_strategies_survive_a_repair() -> None:
+    # Repair providers can only propose built-in strategies. A repair of a field
+    # with custom ones adds its strategies around them: a custom strategy that came
+    # first stays first, one that was a fallback stays after the new strategies.
+    p = patch(
+        fields={
+            "value": {"strategies": [{"css": "dd.tender__amount"}, {"regex": "€([\\d,.]+)"}]},
+            "title": {"strategies": [{"css": "h1.tender__title"}]},
+        }
+    )
+    new = p.apply(with_customs(), version=2)
+    assert new.fields["value"].strategies == (
+        CustomSpec.model_validate(JSONLD),
+        CssSpec(css="dd.tender__amount"),
+        RegexSpec(regex="€([\\d,.]+)"),
+    )
+    assert new.fields["title"].strategies == (
+        CssSpec(css="h1.tender__title"),
+        CustomSpec.model_validate({"custom": "headline"}),
+    )
+
+
+def test_repairs_cannot_remove_custom_strategies_through_the_provider() -> None:
+    # The anthropic provider's answer schema has no custom strategy type, so a
+    # proposal can only be built around the plugin's strategy, never replace it.
+    answer = recorded("anthropic-demo-v2")
+    new = AnthropicProvider(client=RecordedClaude(answer)).propose(CONTEXT)
+    assert new is not None
+    repaired = new.apply(with_customs(), version=2)
+    assert repaired.fields["value"].strategies[0] == CustomSpec.model_validate(JSONLD)
+
+
+def test_a_patch_naming_a_custom_strategy_places_it() -> None:
+    p = patch(fields={"value": {"strategies": [{"css": "dd.tender__amount"}, JSONLD]}})
+    new = p.apply(with_customs(), version=2)
+    assert new.fields["value"].strategies == (
+        CssSpec(css="dd.tender__amount"),
+        CustomSpec.model_validate(JSONLD),
+    )
 
 
 # --- files ------------------------------------------------------------------------------
