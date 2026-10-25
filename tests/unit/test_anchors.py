@@ -15,7 +15,7 @@ def record(n: int, valid: bool = True, **values: Any) -> ValidatedRecord:
     for name, value in values.items():
         fields[name] = FieldResult(value, str(value), 1)
     violations = () if valid else (Violation("reference", "missing", "x"),)
-    result = RecordResult(url=f"https://x.org/notices/{n}", fields=fields)
+    result = RecordResult(url=f"https://example.org/notices/{n}", fields=fields)
     return ValidatedRecord(result, violations, snapshot_id=f"src/run/{n:05d}")
 
 
@@ -28,7 +28,9 @@ def test_encode() -> None:
 
 
 def test_anchor_from_record() -> None:
-    anchor = Anchor.from_record(record(1, value=Decimal("5.00")), "https://x.org/notices/1", "run1")
+    anchor = Anchor.from_record(
+        record(1, value=Decimal("5.00")), "https://example.org/notices/1", "run1"
+    )
     assert anchor.values == {"reference": "TN-0001", "value": "5"}
     assert anchor.raw == {"reference": "TN-0001", "value": "5.00"}
     assert anchor.strategies == {"reference": 0, "value": 1}
@@ -37,7 +39,7 @@ def test_anchor_from_record() -> None:
 
 def test_key_of() -> None:
     r = record(1)
-    assert key_of(r, "url") == "https://x.org/notices/1"
+    assert key_of(r, "url") == "https://example.org/notices/1"
     assert key_of(r, "reference") == "TN-0001"
     assert key_of(r, "missing") is None
 

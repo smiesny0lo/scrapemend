@@ -68,11 +68,11 @@ def test_record_includes_page_url() -> None:
         "title": {"strategies": [{"css": "h1"}]},
         "pdf": {"type": "url", "strategies": [{"css": "a::attr(href)"}]},
     }
-    result = extract(fields, "<h1>T</h1><a href='doc.pdf'>PDF</a>", url="http://x.org/n/1")
+    result = extract(fields, "<h1>T</h1><a href='doc.pdf'>PDF</a>", url="http://example.org/n/1")
     assert result.record == {
-        "url": "http://x.org/n/1",
+        "url": "http://example.org/n/1",
         "title": "T",
-        "pdf": "http://x.org/n/doc.pdf",
+        "pdf": "http://example.org/n/doc.pdf",
     }
 
 

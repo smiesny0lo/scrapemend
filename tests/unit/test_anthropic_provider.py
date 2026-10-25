@@ -30,7 +30,7 @@ CONTEXT = RepairContext(
     ],
     new_listing="<table class='tender-table'>...</table>",
     new_detail="<h1 class='tender__title'>T</h1>",
-    examples=[Example(url="https://x.org/1", values={"title": "T"}, shown_as={"title": "T"})],
+    examples=[Example(url="https://example.org/1", values={"title": "T"}, shown_as={"title": "T"})],
 )
 
 

@@ -62,8 +62,8 @@ def test_healthy_run() -> None:
 @pytest.mark.parametrize(
     "error",
     [
-        BlockedError("https://x.org", "HTTP 403"),
-        RobotsDisallowed("https://x.org", "disallowed by robots.txt"),
+        BlockedError("https://example.org", "HTTP 403"),
+        RobotsDisallowed("https://example.org", "disallowed by robots.txt"),
     ],
 )
 def test_blocked(error: Exception) -> None:
@@ -77,14 +77,14 @@ def test_bot_wall_page_is_blocked_even_with_status_200() -> None:
 
 def test_transient() -> None:
     assert categories(
-        evidence(error=TransientError("https://x.org", "HTTP 503 after 4 attempts"))
+        evidence(error=TransientError("https://example.org", "HTTP 503 after 4 attempts"))
     ) == ["transient"]
 
 
 def test_failure_streak_of_timeouts_is_transient() -> None:
     s = summary(records=3)
     s.failures = [
-        ItemFailure(url=f"https://x.org/{i}", reason="ReadTimeout", transient=True)
+        ItemFailure(url=f"https://example.org/{i}", reason="ReadTimeout", transient=True)
         for i in range(5)
     ]
     assert categories(evidence(summary=s, error=RunAborted("5 items in a row failed"))) == [
@@ -95,7 +95,7 @@ def test_failure_streak_of_timeouts_is_transient() -> None:
 def test_failure_streak_of_404s_means_detail_pages_moved() -> None:
     s = summary(records=3)
     s.failures = [
-        ItemFailure(url=f"https://x.org/{i}", reason="HTTP 404", status=404) for i in range(5)
+        ItemFailure(url=f"https://example.org/{i}", reason="HTTP 404", status=404) for i in range(5)
     ]
     [failure] = classify(evidence(summary=s, error=RunAborted("5 items in a row failed")))[0]
     assert (failure.category, failure.fields) == ("layout_changed", ["item.follow"])
@@ -120,7 +120,7 @@ def test_listing_page_gone() -> None:
 
 def test_container_matches_nothing_after_a_redesign() -> None:
     diagnosis = Diagnosis(
-        pages=["https://x.org/1"], broken=["title"], fallback=["value"], intact=[]
+        pages=["https://example.org/1"], broken=["title"], fallback=["value"], intact=[]
     )
     e = evidence(
         summary=summary(records=0, pages=1),
@@ -221,7 +221,8 @@ def test_too_few_items() -> None:
 def test_many_detail_pages_failing() -> None:
     s = summary(records=150, items=200)
     s.failures = [
-        ItemFailure(url=f"https://x.org/{i}", reason="HTTP 500", status=500) for i in range(50)
+        ItemFailure(url=f"https://example.org/{i}", reason="HTTP 500", status=500)
+        for i in range(50)
     ]
     assert categories(evidence(summary=s)) == ["partial"]
 
