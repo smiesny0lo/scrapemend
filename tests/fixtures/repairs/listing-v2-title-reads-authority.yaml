@@ -1,0 +1,12 @@
+# A wrong repair of examples/sources/demo-listing.yaml for layout v2: every selector
+# works, but the title reads the authority's cell.
+rationale: v2 renamed the listing table's classes.
+confidence: 0.9
+container: { css: "table.tender-table tr.tender-row" }
+next_page: { css: "a[rel=next]::attr(href)" }
+fields:
+  link: { strategies: [{ css: "a.tender-link::attr(href)" }] }
+  title: { strategies: [{ css: "td.col-buyer" }] }
+  authority: { strategies: [{ css: "td.col-buyer" }] }
+  deadline: { strategies: [{ css: "td.col-closing" }] }
+  value: { strategies: [{ css: "td.col-amount" }] }

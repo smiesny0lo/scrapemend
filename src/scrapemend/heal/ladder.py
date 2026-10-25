@@ -241,7 +241,8 @@ def build_context(
     listings = pages.listing_pages()
     example = shown[0] if shown else None
     old_detail = new_detail = None
-    if example is not None and example.url:
+    # Without item.follow there are no detail pages; an anchor's URL is a listing page.
+    if example is not None and example.url and spec.item.follow is not None:
         if example.snapshot_id:
             with suppress(KeyError):  # the old snapshot may have been cleaned up
                 old_detail = prune_document(snapshots.get(example.snapshot_id).document())

@@ -69,7 +69,9 @@ def run_source(
         stopped_early = summary.listing_pages == 1 and (limit is None or summary.items < limit)
         if paginate and baseline and baseline.listing_pages > 1 and stopped_early:
             next_link_missing = find_link(paginate.next, crawl.first_listing) is None
-        if summary.items == 0:
+        # Detail pages known from a good run show which fields broke. Without detail
+        # pages there is nothing to probe: the item container is what broke.
+        if summary.items == 0 and spec.item.follow is not None:
             known = state.anchors.all(spec.id)
             if known:
                 diagnosis = _diagnose_anchors(crawl, known)

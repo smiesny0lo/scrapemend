@@ -101,7 +101,8 @@ def verify(
 
     # 1. listing
     listing_items = listing_links = listing_pages = None
-    links: list[str] = []
+    items: list[tuple[str | None, Document]] = []
+    rows = _Rows(spec, pages)  # listing-only specs: the items of listing pages, by key
     listings = pages.listing_pages()
     if listings:
         first = listings[0]
@@ -110,19 +111,25 @@ def verify(
         if not items:
             problems.append("the item container matches nothing on the listing page")
         if spec.item.follow is not None:
-            links = [key for key, _ in items if key]
-            listing_links = len(links)
-            if items and len(links) < MIN_LINKED_SHARE * len(items):
-                problems.append(f"only {len(links)} of {len(items)} items link to a detail page")
-        listing_pages, walk_problems = _walk(spec, pages, first, items, baseline)
+            linked = sum(key is not None for key, _ in items)
+            listing_links = linked
+            if items and linked < MIN_LINKED_SHARE * len(items):
+                problems.append(f"only {linked} of {len(items)} items link to a detail page")
+        seen, walk_problems = _walk(spec, pages, first, items, baseline)
+        listing_pages = len(seen)
         problems += walk_problems
+        for page in seen:
+            rows.add(page)
 
     # 2. anchors
     checks = {name: FieldCheck(volatile=f.volatile) for name, f in spec.fields.items()}
     shared: Counter[tuple[str, str]] = Counter()  # fields read from one element -> pages
     checked: list[RecordResult] = []
     for anchor in anchors:
-        doc = pages.page(anchor.url) if anchor.url else None
+        if anchor.url is None:
+            continue
+        # Without detail pages, an anchor's URL is only the listing page it was on.
+        doc = pages.page(anchor.url) if spec.item.follow else rows.find(anchor.key, anchor.url)
         if doc is None:
             continue
         result = extractor.extract(doc)
@@ -140,7 +147,11 @@ def verify(
     if not anchors:
         problems.append("no anchors to verify against: the source has had no good run yet")
     elif len(checked) < min(MIN_ANCHORS, len(anchors)):
-        problems.append(f"only {len(checked)} of {len(anchors)} anchor pages could be loaded")
+        problems.append(
+            f"only {len(checked)} of {len(anchors)} anchor pages could be loaded"
+            if spec.item.follow
+            else f"only {len(checked)} of {len(anchors)} anchors were found on their listing pages"
+        )
     for name, check in checks.items():
         needed = volatile_match if check.volatile else threshold
         if check.compared and check.rate < needed:
@@ -155,17 +166,19 @@ def verify(
             f"{a} and {b} read the same element on {count} of {len(checked)} anchor pages"
         )
 
-    # 3. sample
-    anchor_urls = {a.url for a in anchors}
+    # 3. sample: other items of the first listing page (their detail pages, if any)
+    known = {a.url for a in anchors} if spec.item.follow else {a.key for a in anchors}
+    others = [(key, item) for key, item in items if key is not None and key not in known]
     sample: list[RecordResult] = []
-    for url in [link for link in links if link not in anchor_urls][:SAMPLE_PAGES]:
-        doc = pages.page(url)
+    for key, item in others[:SAMPLE_PAGES]:
+        doc = pages.page(key) if spec.item.follow else item
         if doc is not None:
             sample.append(extractor.extract(doc))
-    problems += _sample_problems(spec, anchors, sample)
+    unit = "pages" if spec.item.follow else "items"
+    problems += _sample_problems(spec, anchors, sample, unit)
 
     # 4. known values
-    problems += _value_problems(spec, baseline, checked + sample)
+    problems += _value_problems(spec, baseline, checked + sample, unit)
 
     return VerificationReport(
         accepted=not problems,
@@ -205,50 +218,79 @@ def _walk(
     first: Document,
     items: list[tuple[str | None, Document]],
     baseline: RunSummary | None,
-) -> tuple[int, list[str]]:
+) -> tuple[list[Document], list[str]]:
     """Follow the next-page link from the first listing page for PAGINATION_HOPS
     pages, or until it ends. Each page must load and bring items not seen on the
     pages before, and the link must not end before the last good run's did.
-    Returns the number of listing pages seen and the problems found."""
+    Returns the listing pages seen, the first included, and the problems found."""
+    walked = [first]
     paginate = spec.fetch.paginate
     if paginate is None:
-        return 1, []
+        return walked, []
     seen = {key for key, _ in items if key}
     visited = {first.url}
-    page, number = first, 1
-    while number <= PAGINATION_HOPS:
-        link = find_link(paginate.next, page)
+    while len(walked) <= PAGINATION_HOPS:
+        number = len(walked)
+        link = find_link(paginate.next, walked[-1])
         if link is None:
             break
         if link in visited:
-            return number, [
+            return walked, [
                 f"the next-page link on listing page {number} leads back to an earlier page"
             ]
         visited.add(link)
-        loaded = pages.listing(link)
-        if loaded is None:
-            return number, [f"listing page {number + 1} could not be loaded: {link}"]
-        keys = [key for key, _ in _items(spec, loaded) if key]
+        page = pages.listing(link)
+        if page is None:
+            return walked, [f"listing page {number + 1} could not be loaded: {link}"]
+        walked.append(page)
+        keys = [key for key, _ in _items(spec, page) if key]
         if not keys:
-            return number + 1, [f"the item container matches nothing on listing page {number + 1}"]
+            return walked, [f"the item container matches nothing on listing page {number + 1}"]
         repeated = sum(key in seen for key in keys)
         if repeated > MAX_REPEATED_SHARE * len(keys):
-            return number + 1, [
+            return walked, [
                 f"the next-page link on listing page {number} leads to a page that repeats "
                 f"{repeated} of {len(keys)} items already seen"
             ]
         seen.update(keys)
-        page, number = loaded, number + 1
     expected = 1 if baseline is None else min(PAGINATION_HOPS + 1, baseline.listing_pages)
-    if number >= expected:
-        return number, []
-    if number == 1:
-        return number, ["no next-page link on the first listing page"]
+    if len(walked) >= expected:
+        return walked, []
+    if len(walked) == 1:
+        return walked, ["no next-page link on the first listing page"]
     assert baseline is not None
-    return number, [
-        f"pagination ends after {number} listing pages; "
+    return walked, [
+        f"pagination ends after {len(walked)} listing pages; "
         f"the last good run had {baseline.listing_pages}"
     ]
+
+
+class _Rows:
+    """For a spec without detail pages: the items of the listing pages seen so far,
+    by key, to find an anchor's item in. An item may have moved to another page since
+    the good run, so every page seen is searched before the anchor's own is loaded."""
+
+    def __init__(self, spec: SourceSpec, pages: Pages) -> None:
+        self.spec = spec
+        self.pages = pages
+        self.items: dict[str, Document] = {}
+        self.loaded: set[str | None] = set()
+
+    def add(self, page: Document) -> None:
+        if self.spec.item.follow is not None:
+            return
+        self.loaded.add(page.url)
+        for key, item in _items(self.spec, page):
+            if key is not None:
+                self.items.setdefault(key, item)
+
+    def find(self, key: str, url: str) -> Document | None:
+        if key not in self.items and url not in self.loaded:
+            self.loaded.add(url)
+            page = self.pages.listing(url)
+            if page is not None:
+                self.add(page)
+        return self.items.get(key)
 
 
 def _shared_elements(
@@ -277,7 +319,7 @@ def _shared_elements(
 
 
 def _sample_problems(
-    spec: SourceSpec, anchors: list[Anchor], sample: list[RecordResult]
+    spec: SourceSpec, anchors: list[Anchor], sample: list[RecordResult], unit: str
 ) -> list[str]:
     problems: list[str] = []
     if not sample:
@@ -290,10 +332,10 @@ def _sample_problems(
         if field.required and len(filled) < len(values):
             problems.append(
                 f"required field {name} is empty on {len(values) - len(filled)}"
-                f" of {len(values)} other pages"
+                f" of {len(values)} other {unit}"
             )
         elif len(values) >= 3 and not filled and usually_filled:
-            problems.append(f"{name} is empty on all {len(values)} other pages")
+            problems.append(f"{name} is empty on all {len(values)} other {unit}")
         distinct_known = {v for v in known if v is not None}
         if (
             not field.volatile
@@ -302,14 +344,14 @@ def _sample_problems(
             and len(set(filled)) == 1
         ):
             problems.append(
-                f"{name} reads {filled[0]!r} on every other page although it differs "
-                "between anchors: the strategy may only fit the examples"
+                f"{name} reads {filled[0]!r} on every other {unit.removesuffix('s')} although it "
+                "differs between anchors: the strategy may only fit the examples"
             )
     return problems
 
 
 def _value_problems(
-    spec: SourceSpec, baseline: RunSummary | None, records: list[RecordResult]
+    spec: SourceSpec, baseline: RunSummary | None, records: list[RecordResult], unit: str
 ) -> list[str]:
     """Fields that took only a few values in the last good run (a status, a category)
     must mostly read values from that set; a new one now and then is fine."""
@@ -327,6 +369,6 @@ def _value_problems(
             had = ", ".join(sorted(map(str, known)))
             problems.append(
                 f"{name} reads values the last good run never had on {len(unknown)} of "
-                f"{len(values)} pages (e.g. {unknown[0]!r}; it had: {had})"
+                f"{len(values)} {unit} (e.g. {unknown[0]!r}; it had: {had})"
             )
     return problems

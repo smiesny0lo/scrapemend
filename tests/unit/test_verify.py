@@ -339,6 +339,90 @@ def test_next_listing_page_must_have_items() -> None:
     assert report.problems == ["the item container matches nothing on listing page 2"]
 
 
+# --- listing-only specs: no detail pages ------------------------------------------------
+
+
+def listing_spec(**fields: dict[str, Any]) -> SourceSpec:
+    default: dict[str, dict[str, Any]] = {
+        "ref": {"required": True, "strategies": [{"css": ".ref"}]},
+        "name": {"strategies": [{"css": ".name"}]},
+    }
+    return SourceSpec.model_validate(
+        {
+            "id": "demo",
+            "fetch": {"start": f"{BASE}/list", "paginate": {"next": {"css": "a.next"}}},
+            "item": {"container": {"css": "li"}, "key": "ref"},
+            "fields": default | fields,
+        }
+    )
+
+
+def rows(numbers: range, next_page: str | None) -> str:
+    items = "".join(
+        f"<li><span class='ref'>R{i}</span> <span class='name'>Name {i}</span></li>"
+        for i in numbers
+    )
+    pager = f"<a class='next' href='{next_page}'>Next</a>" if next_page else ""
+    return f"<ul>{items}</ul>{pager}"
+
+
+ROWS = {
+    f"{BASE}/list?page=2": rows(range(20, 40), "?page=3"),
+    f"{BASE}/list?page=3": rows(range(40, 60), "?page=4"),
+    f"{BASE}/list?page=4": rows(range(60, 80), None),
+}
+
+
+def row_anchor(i: int, page: int) -> Anchor:
+    url = f"{BASE}/list" if page == 1 else f"{BASE}/list?page={page}"
+    return Anchor(
+        key=f"R{i}",
+        url=url,
+        values={"ref": f"R{i}", "name": f"Name {i}"},
+        raw={},
+        strategies={},
+        snapshot_id=None,
+        run_id="good",
+    )
+
+
+ROW_ANCHORS = [row_anchor(3, 1), row_anchor(17, 1), row_anchor(25, 2), row_anchor(66, 4)]
+
+
+def run_rows(candidate: SourceSpec, anchors: list[Anchor] = ROW_ANCHORS) -> Any:
+    pages = FakePages({}, rows(range(20), "?page=2"), ROWS)
+    return verify(candidate, anchors, pages, baseline=BASELINE), pages
+
+
+def test_listing_only_anchors_are_found_by_their_key() -> None:
+    report, pages = run_rows(listing_spec())
+    assert report.accepted, report.problems
+    assert (report.anchors_checked, report.score) == (4, 1.0)
+    assert report.sample == 10  # other rows of the first listing page
+    # Pages 2 and 3 along the next link, then the last anchor's own listing page.
+    assert pages.listings == [f"{BASE}/list?page={n}" for n in (2, 3, 4)]
+    assert pages.requested == []  # no detail pages
+
+
+def test_listing_only_anchors_that_moved_or_went_are_tolerated() -> None:
+    # R25 is now listed on page 2, not where it was found; R99 is gone.
+    anchors = [*ROW_ANCHORS[:3], row_anchor(25, 1), row_anchor(99, 2)]
+    report, _ = run_rows(listing_spec(), anchors)
+    assert report.accepted, report.problems
+    assert report.anchors_checked == 4
+
+
+def test_listing_only_wrong_field_is_rejected() -> None:
+    report, _ = run_rows(listing_spec(name={"strategies": [{"css": ".ref"}]}))
+    assert not report.accepted
+    assert (report.fields["ref"].rate, report.fields["name"].rate) == (1.0, 0.0)
+
+
+def test_listing_only_broken_key_finds_no_anchors() -> None:
+    report, _ = run_rows(listing_spec(ref={"required": True, "strategies": [{"css": ".nope"}]}))
+    assert "only 0 of 4 anchors were found on their listing pages" in report.problems
+
+
 def test_needs_anchors() -> None:
     assert "no anchors to verify against" in run(spec(), anchors=[]).problems[0]
 
