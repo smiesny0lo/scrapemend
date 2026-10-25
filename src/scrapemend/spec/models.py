@@ -251,8 +251,10 @@ class ExpectSpec(_Model):
 class HealSpec(_Model):
     mode: Literal["off", "propose", "auto"] = "propose"
     anchors: int = Field(default=10, ge=0)  # known-good records kept for verification
-    # Share of anchor values every field must reproduce for a repair to be accepted.
-    threshold: float = Field(default=0.9, gt=0, le=1)
+    # Share of anchor values every stable field must reproduce for a repair to be
+    # accepted. Anchor pages that fail to load don't count, but at least three must
+    # load (or all, if there are fewer).
+    threshold: float = Field(default=1.0, gt=0, le=1)
     # The same for volatile fields, whose values may have changed since: most must not.
     volatile_match: float = Field(default=0.6, ge=0, le=1)
 

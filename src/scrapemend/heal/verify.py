@@ -9,8 +9,10 @@ A candidate is judged on pages under the current layout, never on its own say-so
    load, pass the same item check and bring new items, so a link back to an
    earlier page, or one hard-coded to page 2, is caught.
 2. Anchors: on the anchor pages (fetched again under the new layout), does every
-   field reproduce the known-good values? Stable fields must match exactly on at
-   least heal.threshold of the anchors. Volatile ones (prices, statuses) may have
+   field reproduce the known-good values? Stable fields must match exactly on
+   heal.threshold of the anchors: by default all of them. Only anchor pages that
+   fail to load are left out, and at least three (or all, if fewer) must load.
+   Volatile ones (prices, statuses) may have
    changed since, but most must not: at least heal.volatile_match of them must
    still match exactly. Every field is judged on its own, so one wrongly mapped
    field can't hide behind nine correct ones. And no two fields may read the same

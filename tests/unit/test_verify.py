@@ -241,6 +241,32 @@ def test_threshold(threshold: float, accepted: bool) -> None:
     assert report.accepted is accepted
 
 
+def test_stable_fields_must_match_every_anchor_by_default() -> None:
+    # One anchor of ten wrong is one record in ten wrong in every run.
+    cities = {
+        u: html.replace("class='city'", "class='town'") if i == 9 else html
+        for i, (u, html) in enumerate(DETAILS.items())
+    }
+    report = run(spec(), FakePages(cities, listing_for(URLS)))
+    assert report.threshold == 1.0
+    assert report.problems == [
+        "city reproduces 9/10 anchor values (needs 100%); expected 'City 1', got None"
+    ]
+
+
+def test_anchor_pages_that_fail_to_load_are_tolerated() -> None:
+    reachable = {u: h for i, (u, h) in enumerate(DETAILS.items()) if i not in (4, 8)}
+    report = run(spec(), FakePages(reachable, listing_for(URLS)))
+    assert report.accepted, report.problems
+    assert report.anchors_checked == 8
+
+
+def test_with_fewer_than_three_anchors_all_must_load() -> None:
+    reachable = {u: h for i, (u, h) in enumerate(DETAILS.items()) if i != 1}
+    report = run(spec(), FakePages(reachable, listing_for(URLS)), anchors=ANCHORS[:2])
+    assert "only 1 of 2 anchor pages could be loaded" in report.problems
+
+
 def test_overfitted_to_shown_anchors() -> None:
     # Matches exactly the titles of three anchors, as if memorised from examples.
     memorised = "|".join(f"Title {i}" for i in range(3))

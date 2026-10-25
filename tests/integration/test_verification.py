@@ -14,11 +14,13 @@ import pytest
 from fastapi import FastAPI
 
 from examples.mutating_site.app import create_app
+from examples.mutating_site.records import generate_notices
+from scrapemend.extract import Extractor
 from scrapemend.fetch import HttpFetcher
 from scrapemend.heal.anchors import Anchor, split
 from scrapemend.heal.pages import PageSource
 from scrapemend.heal.verify import VerificationReport, verify
-from scrapemend.pipeline import RunSummary
+from scrapemend.pipeline import RunSummary, ValidatedRecord
 from scrapemend.runner import run_source
 from scrapemend.snapshots import FilesystemSnapshotStore
 from scrapemend.spec import CssSpec, SourceSpec, load_patch, load_spec
@@ -31,6 +33,7 @@ pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
 REPAIRS = ROOT / "examples" / "repairs"
 BAD = ROOT / "tests" / "fixtures" / "repairs"
+NOTICES = generate_notices()
 
 
 @dataclass
@@ -47,10 +50,26 @@ class Broken:
     pages: PageSource
     new_fetcher: Callable[[], HttpFetcher]
 
-    def check(self, patch: SpecPatch) -> VerificationReport:
-        return verify(
-            patch.apply(self.spec, version=2), self.anchors, self.pages, baseline=self.baseline
-        )
+    def check(self, patch: SpecPatch, anchors: list[Anchor] | None = None) -> VerificationReport:
+        candidate = patch.apply(self.spec, version=2)
+        return verify(candidate, anchors or self.anchors, self.pages, baseline=self.baseline)
+
+    def anchors_for(self, urls: list[str]) -> list[Anchor]:
+        """Anchors for chosen pages, kept from the good run as the anchor picker would."""
+        good = self.state.runs.last_good(self.spec.id)
+        assert good is not None
+        stored = {}
+        for snapshot_id in self.snapshots.snapshots(self.spec.id, good.run_id):
+            snapshot = self.snapshots.get(snapshot_id)
+            if snapshot.kind == "detail":
+                stored[snapshot.url] = snapshot_id
+        extractor = Extractor(self.spec.fields)
+        anchors = []
+        for url in urls:
+            result = extractor.extract(self.snapshots.get(stored[url]).document())
+            record = ValidatedRecord(result, (), stored[url])
+            anchors.append(Anchor.from_record(record, url, good.run_id))
+        return anchors
 
 
 # One good run and one redesign per layout, shared by the tests of this module.
@@ -183,6 +202,43 @@ def test_container_matching_more_than_items_is_rejected(broken: Broken) -> None:
         f"only 20 of {matched} items on listing page 2 link to a detail page",
         f"only 20 of {matched} items on listing page 3 link to a detail page",
     ]
+
+
+def test_a_field_wrong_on_one_anchor_is_rejected(broken: Broken) -> None:
+    # Review attack 3b: location is the last word of the title. Only Fenwick Vale (12
+    # of 200 notices) gets it wrong. With one such notice among ten anchors, the field
+    # reproduces 9/10, which the old 90% threshold accepted.
+    if layout(broken) == 3:
+        patch = load_patch(BAD / "v3-location-last-word.yaml")
+    else:
+        correct = load_patch(REPAIRS / "demo-v2.yaml")
+        last_word = FieldPatch.model_validate(
+            {"strategies": [{"regex": r"(\w+)$", "within": {"css": "h1.tender__title"}}]}
+        )
+        patch = correct.model_copy(update={"fields": correct.fields | {"location": last_word}})
+    base = str(broken.spec.fetch.start)
+    vale = [f"{base}/{n.id}" for n in NOTICES if n.location == "Fenwick Vale"]
+    others = [f"{base}/{n.id}" for n in NOTICES if n.location != "Fenwick Vale"]
+    anchors = broken.anchors_for(vale[:1] + others[:9])
+
+    report = broken.check(patch, anchors)
+    assert report.fields["location"].rate == 0.9
+    assert report.problems == [
+        "location reproduces 9/10 anchor values (needs 100%); expected 'Fenwick Vale', got 'Vale'"
+    ]
+    # Where no anchor is a Fenwick Vale notice, the gate can't see it: see
+    # docs/verification.md, "What the gate can and can't catch".
+
+
+def test_unloadable_anchor_pages_are_tolerated(broken: Broken) -> None:
+    # A notice taken down since the good run: its page is gone, not wrong.
+    gone = broken.anchors[0].model_copy(update={"url": f"{broken.spec.fetch.start}/TN-0000-0000"})
+    report = broken.check(load_patch(REPAIRS / f"demo-v{layout(broken)}.yaml"))
+    tolerant = broken.check(
+        load_patch(REPAIRS / f"demo-v{layout(broken)}.yaml"), [gone, *broken.anchors[1:]]
+    )
+    assert report.accepted and tolerant.accepted, tolerant.problems
+    assert (report.anchors_checked, tolerant.anchors_checked) == (10, 9)
 
 
 def test_empty_repair_is_rejected(broken: Broken) -> None:
