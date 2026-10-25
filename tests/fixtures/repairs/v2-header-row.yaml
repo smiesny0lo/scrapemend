@@ -1,0 +1,19 @@
+# Review attack 2b on layout v2: the correct repair, except that the item container
+# is every row of the table, the header row included. 20 of 21 items still link to
+# a detail page, which passed an 80% share; the crawl then fails one item a page.
+rationale: v2 renamed classes; new selectors.
+confidence: 0.9
+container: { css: "table.tender-table tr" }
+follow: { css: "a.tender-link::attr(href)" }
+next_page: { css: "a[rel=next]::attr(href)" }
+fields:
+  reference: { strategies: [{ css: "dd.tender__ref" }] }
+  title: { strategies: [{ css: "h1.tender__title" }] }
+  authority: { strategies: [{ css: "dd.tender__buyer" }] }
+  category: { strategies: [{ css: "dd.tender__category" }] }
+  location: { strategies: [{ css: "dd.tender__location" }] }
+  published: { strategies: [{ css: "dd.tender__published" }] }
+  deadline: { strategies: [{ css: "dd.tender__closing" }] }
+  value: { strategies: [{ css: "dd.tender__amount" }] }
+  status: { strategies: [{ css: "dd.tender__status" }] }
+  description: { strategies: [{ css: "div.tender__description p" }] }

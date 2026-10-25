@@ -21,7 +21,7 @@ from scrapemend.heal.verify import VerificationReport, verify
 from scrapemend.pipeline import RunSummary
 from scrapemend.runner import run_source
 from scrapemend.snapshots import FilesystemSnapshotStore
-from scrapemend.spec import SourceSpec, load_patch, load_spec
+from scrapemend.spec import CssSpec, SourceSpec, load_patch, load_spec
 from scrapemend.spec.patch import FieldPatch, SpecPatch
 from scrapemend.state import State
 from tests.support import FakeClock, serve
@@ -165,6 +165,24 @@ def test_next_page_link_must_lead_through_the_listing(broken: Broken) -> None:
     }[layout(broken)]
     report = broken.check(load_patch(BAD / fixture))
     assert report.problems == [problem]
+
+
+def test_container_matching_more_than_items_is_rejected(broken: Broken) -> None:
+    if layout(broken) == 2:
+        # Review attack 2b: every table row, the header row (which has no link) too.
+        patch = load_patch(BAD / "v2-header-row.yaml")
+        matched = 21
+    else:
+        # Every div of the grid: the cards, and the authority line inside each.
+        correct = load_patch(REPAIRS / "demo-v3.yaml")
+        patch = correct.model_copy(update={"container": CssSpec(css="div.grid div")})
+        matched = 40
+    report = broken.check(patch)
+    assert report.problems == [
+        f"only 20 of {matched} items link to a detail page",
+        f"only 20 of {matched} items on listing page 2 link to a detail page",
+        f"only 20 of {matched} items on listing page 3 link to a detail page",
+    ]
 
 
 def test_empty_repair_is_rejected(broken: Broken) -> None:

@@ -9,7 +9,7 @@ from scrapemend.heal.anchors import Anchor
 from scrapemend.heal.verify import verify
 from scrapemend.pipeline import FieldStats, RunSummary
 from scrapemend.spec import SourceSpec
-from scrapemend.spec.models import HealSpec
+from scrapemend.spec.models import HealSpec, ItemSpec
 
 BASE = "https://example.org"
 
@@ -283,6 +283,34 @@ def test_items_must_still_link_to_details() -> None:
     assert "only 5 of 30 items link to a detail page" in report.problems
 
 
+def test_every_item_must_link_to_its_detail_page() -> None:
+    # A container that also matches a header row: one item in 31 without a link
+    # would fail on every page of every crawl.
+    listing = "<ul><li>Title</li></ul>" + listing_for(URLS)
+    report = run(spec(), FakePages(DETAILS, listing))
+    assert report.problems == ["only 30 of 31 items link to a detail page"]
+
+
+def test_every_item_on_later_listing_pages_must_link_too() -> None:
+    page_2 = "<ul><li>Title</li></ul>" + listing_for(MORE_URLS[:10], "?page=3")
+    more = MORE | {f"{BASE}/list?page=2": page_2}
+    report = run(spec(), FakePages(DETAILS, listing_for(URLS), more))
+    assert report.problems == ["only 10 of 11 items on listing page 2 link to a detail page"]
+
+
+def test_an_item_matched_twice_is_rejected() -> None:
+    # The container matches each item's row and an element inside it.
+    candidate = spec().model_copy(
+        update={
+            "item": ItemSpec.model_validate(
+                {"container": {"css": "li, li > a"}, "follow": {"css": "a"}}
+            )
+        }
+    )
+    report = run(candidate)
+    assert "30 of 60 items repeat another item of the same page" in report.problems
+
+
 def test_pagination_must_still_work() -> None:
     report = run(spec(), FakePages(DETAILS, listing_for(URLS, next_page=None)))
     assert "no next-page link on the first listing page" in report.problems
@@ -416,6 +444,12 @@ def test_listing_only_wrong_field_is_rejected() -> None:
     report, _ = run_rows(listing_spec(name={"strategies": [{"css": ".ref"}]}))
     assert not report.accepted
     assert (report.fields["ref"].rate, report.fields["name"].rate) == (1.0, 0.0)
+
+
+def test_listing_only_items_must_have_a_key() -> None:
+    pages = FakePages({}, "<ul><li>Ref - Name</li></ul>" + rows(range(20), "?page=2"), ROWS)
+    report = verify(listing_spec(), ROW_ANCHORS, pages, baseline=BASELINE)
+    assert report.problems == ["only 20 of 21 items have a key (ref)"]
 
 
 def test_listing_only_broken_key_finds_no_anchors() -> None:
