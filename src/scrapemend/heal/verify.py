@@ -390,7 +390,8 @@ def _value_problems(
         values = [v for v in (encode(r.fields[name].value) for r in records) if v is not None]
         unknown = [v for v in values if v not in known]
         if len(values) >= MIN_VALUES and len(unknown) > MAX_UNKNOWN_SHARE * len(values):
-            had = ", ".join(sorted(map(str, known)))
+            names = sorted(map(str, known))
+            had = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
             problems.append(
                 f"{name} reads values the last good run never had on {len(unknown)} of "
                 f"{len(values)} {unit} (e.g. {unknown[0]!r}; it had: {had})"

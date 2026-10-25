@@ -29,7 +29,7 @@ scrapemend heal my-source.yaml --patch my-fix.yaml
 
 ## What a patch can change
 
-A `SpecPatch` can set new selectors for the item container, the follow link and the next-page link. It can also give existing fields new strategies, along with their `normalize`, `date_format` and `null_values`.
+A `SpecPatch` can set new selectors for the item container, the follow link and the next-page link. It can also give existing fields new strategies, along with their `normalize`, `date_format` and `null_values`. A field's [custom strategies](custom-strategies.md) are kept: the patch's strategies are added around them.
 
 It **cannot** touch:
 
@@ -60,7 +60,7 @@ Settings:
 
 On the demo site, one repair takes 15–25 s and roughly 7.5k input and 2k output tokens, about $0.07–0.09 at Claude Opus 5.5 prices. In testing, Claude repaired both demo redesigns on the first attempt, with every field reproducing 10/10 anchor values. Those answers are recorded in `tests/fixtures/recorded/` and replayed in CI.
 
-**Untrusted input.** Page HTML comes from the scraped website. The prompt marks it as data and tells the model to ignore instructions inside it. The patch schema and the gate are the real defence: even a manipulated answer can only propose selectors, and those must reproduce the known values.
+**Untrusted input.** Page HTML comes from the scraped website. The prompt marks it as data and tells the model to ignore instructions inside it. The patch schema and the gate are the real defence: even a manipulated answer can only propose selectors and strategies, and those must reproduce the known values on the pages the gate checks (see [what the gate can and can't catch](verification.md#what-the-gate-can-and-cant-catch)).
 
 ## Writing your own provider
 

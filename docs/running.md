@@ -30,7 +30,7 @@ Shared options, also available as environment variables (see `.env.example`):
 
 Records go to stdout or `--out` as JSON lines. Decimals are written as exact strings (`"566600.00"`) and dates as ISO strings. Invalid records (a required field missing, a `pattern` not matched) are held back unless you pass `--keep-invalid`. The report goes to stderr.
 
-On Windows PowerShell 5.1, prefer `--out` to `>`, because `>` re-encodes the output as UTF-16.
+Everything scrapemend prints, records and reports alike, is UTF-8 on every platform, including Windows pipes and files. On Windows PowerShell 5.1, prefer `--out` to `>`: PowerShell decodes a program's output in the console's code page and re-encodes it as UTF-16, which garbles anything that isn't ASCII.
 
 ## What a run reports
 
