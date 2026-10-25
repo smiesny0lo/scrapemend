@@ -73,6 +73,8 @@ A repair is **accepted** only if every check passed. One that failed a check is 
 - the failed run's listing page isn't in the snapshots (`promote` pointed at the wrong `--snapshots`);
 - a quicker check failed first (the shadow run is skipped).
 
+A shadow run that stops at a page it can't fetch still fails the repair if the records it did compare already break the rules, whatever the rest would read: then `--force` can't help.
+
 `heal` keeps an unverified repair, quarantines the source and says why. It doesn't ask the provider for another attempt: a new patch can't make a page load.
 
 ```

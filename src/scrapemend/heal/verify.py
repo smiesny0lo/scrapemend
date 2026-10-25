@@ -682,7 +682,10 @@ def _shadow(
     for key, result in records:
         comparison.add(key, result)
     if crawl.unavailable is not None:
-        return run, crawl.problems, crawl.unavailable
+        # Stopped short: what it compared may still prove the candidate wrong.
+        most = crawl.drawn if sampled else len(known)
+        problems = comparison.problems(threshold, spec.heal.volatile_change, out_of=most)
+        return run, crawl.problems + problems, crawl.unavailable
 
     problems = crawl.problems
     if sampled:
@@ -867,27 +870,33 @@ class _Comparison:
             if name in expected:
                 check.add(result.url, expected[name], encode(result.fields[name].value))
 
-    def problems(self, threshold: float, volatile_change: float) -> list[str]:
+    def problems(
+        self, threshold: float, volatile_change: float, out_of: int | None = None
+    ) -> list[str]:
+        """The fields that break the rules. `out_of`: the crawl stopped short, and
+        could have compared at most that many records; then only mismatches beyond what
+        the rules allow even if every other record matched are problems."""
         problems = []
         for name, f in self.run.fields.items():
             if not f.compared:
                 continue
+            base = f.compared if out_of is None else max(out_of, f.compared)
             if not f.volatile:
-                if f.matched < threshold * f.compared:
+                if f.compared - f.matched > (1 - threshold) * base:
                     e = f.mismatches[0]
                     problems.append(
                         f"{name} reproduces {f.matched}/{f.compared} values of the last good run "
                         f"(needs {threshold:.0%}); expected {e.expected!r}, got {e.got!r}"
                     )
                 continue
-            if f.emptied > (1 - threshold) * f.compared:
+            if f.emptied > (1 - threshold) * base:
                 e = f.example(emptied=True)
                 problems.append(
                     f"{name} became empty on {f.emptied} of {f.compared} records that had a "
                     "value in the last good run (a volatile field may change, but not become "
                     f"empty); expected {e.expected!r}, got None"
                 )
-            if f.changed > volatile_change * f.compared:
+            if f.changed > volatile_change * base:
                 e = f.example(emptied=False)
                 problems.append(
                     f"{name} changed on {f.changed} of {f.compared} records since the last good "
@@ -899,4 +908,6 @@ class _Comparison:
                 f"required field {name} is empty on {empty} of {self.new} records "
                 "the last good run didn't have"
             )
+        if out_of is not None:
+            return problems  # a share of values not yet read could still go either way
         return problems + self.values.problems("records of the shadow run")

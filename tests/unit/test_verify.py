@@ -445,6 +445,32 @@ def test_a_detail_page_that_cannot_be_fetched_stops_the_shadow_run() -> None:
     }
 
 
+@pytest.mark.parametrize(("changed", "verdict"), [(5, "not run"), (6, "failed")])
+def test_mismatches_found_before_the_shadow_run_stopped_still_fail(
+    changed: int, verdict: str
+) -> None:
+    # The crawl stops at page 45, which can't be fetched. Before it, city was wrong on
+    # page 25, and price changed on `changed` pages: 6 is more than 10% of the 50 records
+    # whatever the rest would have read, so --force can't promote it; 5 may not be.
+    unreachable = list(DETAILS)[45]
+    pages = {
+        u: new_price(html) if 20 <= i < 20 + changed else html
+        for i, (u, html) in enumerate(DETAILS.items())
+    }
+    report = run(spec(), FakePages(pages, listing_for(URLS), unreachable={unreachable}))
+    assert report.verdict == verdict
+    wrong_city = {
+        u: html.replace("class='city'", "class='town'") if i == 25 else html
+        for i, (u, html) in enumerate(DETAILS.items())
+    }
+    stopped = run(spec(), FakePages(wrong_city, listing_for(URLS), unreachable={unreachable}))
+    assert stopped.verdict == "failed"
+    assert stopped.problems == [
+        "city reproduces 44/45 values of the last good run (needs 100%); "
+        "expected 'City 1', got None"
+    ]
+
+
 def test_a_listing_page_that_cannot_be_fetched_stops_the_shadow_run() -> None:
     # Listing page 4 is past the pagination check: only the shadow run gets there.
     page_4 = f"{BASE}/list?page=4"
