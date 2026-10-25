@@ -37,6 +37,7 @@ from scrapemend.runner import run_source
 from scrapemend.runs import RunReport
 from scrapemend.snapshots import SnapshotStore
 from scrapemend.spec import SourceSpec
+from scrapemend.spec.patch import SpecPatch
 from scrapemend.spec.store import SpecVersion
 from scrapemend.state import State
 
@@ -128,9 +129,9 @@ def heal(
         if patch is None or patch.is_empty:
             break
         try:
-            candidate = patch.apply(spec, version=state.specs.next_version(spec.id))
-        except ValueError as e:
-            report = _unusable(spec, anchors, f"the patch does not fit the spec: {e}")
+            candidate, patch = _candidate(spec, state, provider, patch)
+        except _Unusable as e:
+            report = _unusable(spec, anchors, e.check)
         else:
             report = verify(
                 candidate,
@@ -411,8 +412,42 @@ def _skip(spec: SourceSpec, message: str, run: RunReport | None = None) -> HealO
     )
 
 
-def _unusable(spec: SourceSpec, anchors: list[Anchor], problem: str) -> VerificationReport:
-    check = Check(name="patch", status="failed", reason="applied to the spec", problems=[problem])
+class _Unusable(Exception):
+    def __init__(self, check: Check) -> None:
+        self.check = check
+
+
+def _candidate(
+    spec: SourceSpec, state: State, provider: RepairProvider, patch: SpecPatch
+) -> tuple[SourceSpec, SpecPatch]:
+    """The candidate spec a patch makes, and the patch as stored. A provider's regexes
+    run on RE2, which no text can make slow; a hand-written patch keeps Python's re."""
+    if not getattr(provider, "hand_written", False):
+        try:
+            patch = patch.with_regex_engine("re2")
+        except ValueError as e:
+            raise _Unusable(
+                Check(
+                    name="regexes",
+                    status="failed",
+                    reason="a provider's regexes run on RE2",
+                    problems=[str(e)],
+                )
+            ) from None
+    try:
+        return patch.apply(spec, version=state.specs.next_version(spec.id)), patch
+    except ValueError as e:
+        raise _Unusable(
+            Check(
+                name="patch",
+                status="failed",
+                reason="applied to the spec",
+                problems=[f"the patch does not fit the spec: {e}"],
+            )
+        ) from None
+
+
+def _unusable(spec: SourceSpec, anchors: list[Anchor], check: Check) -> VerificationReport:
     return VerificationReport(
         checks=[check],
         threshold=spec.heal.threshold,

@@ -4,6 +4,9 @@ A candidate is judged on pages under the current layout, never on its own say-so
 Quick checks on a few pages come first, so most wrong repairs are turned down
 without crawling the site:
 
+0. Regexes: none may take longer than its engine allows (see
+   scrapemend.extract.patterns). One that backtracks catastrophically on these
+   pages would do so on every run.
 1. Listing: does the item container still find items, and does every item it
    matches have its key (its detail link, or the key field), once? A container
    that also matches a header row fails here. The next-page link is followed for
@@ -62,13 +65,13 @@ from typing import Literal
 from lxml import etree
 from pydantic import BaseModel, Field
 
-from scrapemend.extract import Document, Extractor, RecordResult
+from scrapemend.extract import Document, Extractor, RecordResult, patterns
 from scrapemend.extract.select import find_link, select_all
-from scrapemend.extract.strategies import Locating, Strategy, build
+from scrapemend.extract.strategies import Locating, Strategy, StrategyTimeout, build
 from scrapemend.heal.anchors import Anchor, AnchorValue, KnownRecords, encode, key_of
 from scrapemend.heal.pages import Pages
 from scrapemend.pipeline import RunSummary
-from scrapemend.spec import SourceSpec
+from scrapemend.spec import RegexSpec, SourceSpec
 
 MIN_ANCHORS = 3  # anchor pages that must load for a verdict (all of them, if fewer)
 SAMPLE_PAGES = 10  # non-anchor detail pages checked for plausibility
@@ -316,7 +319,7 @@ def verify(
     # 5. the shadow run, unless a quicker check already failed
     shadow = None
     quick = [listing, anchor_check, sample_check, values_check]
-    if any(check.status == "failed" for check in quick):
+    if extractor.timeouts or any(check.status == "failed" for check in quick):
         shadow_check = _check("shadow run", [], "skipped: a quicker check failed", "")
     elif first is None:
         shadow_check = _check("shadow run", [], "skipped: no listing page to start from", "")
@@ -327,7 +330,7 @@ def verify(
         shadow_check = _check("shadow run", problems, unavailable, _covered(shadow))
 
     return VerificationReport(
-        checks=[*quick, shadow_check],
+        checks=[_regexes(spec, extractor), *quick, shadow_check],
         threshold=threshold,
         volatile_match=volatile_match,
         volatile_change=spec.heal.volatile_change,
@@ -350,6 +353,27 @@ def _check(name: str, problems: list[str], not_run: str | None, covered: str) ->
     if not_run is not None:
         return Check(name=name, status="not run", reason=not_run)
     return Check(name=name, status="passed", reason=covered)
+
+
+def _regexes(spec: SourceSpec, extractor: Extractor) -> Check:
+    """Every regex timeout the verification ran into, on any page."""
+    regexes = [s for f in spec.fields.values() for s in f.strategies if isinstance(s, RegexSpec)]
+    if not regexes:
+        return _check("regexes", [], None, "no regexes")
+    on_re2 = sum(r.engine == "re2" for r in regexes)
+    limit = f"{patterns.TIME_LIMIT:g}s"
+    engines = [f"{on_re2} on RE2"] if on_re2 else []
+    if on_re2 < len(regexes):
+        engines.append(f"{len(regexes) - on_re2} on Python's re (at most {limit} a search)")
+    counted = f"{len(regexes)} regex{'es' if len(regexes) > 1 else ''}"
+    problems = []
+    for (name, index), pages in extractor.timeouts.items():
+        strategy = spec.fields[name].strategies[index]
+        what = (
+            f"regex {strategy.regex!r}" if isinstance(strategy, RegexSpec) else f"strategy {index}"
+        )
+        problems.append(f"{name}: {what} took longer than {limit} on {pages} pages")
+    return _check("regexes", problems, None, f"{counted}: {', '.join(engines)}")
 
 
 def _covered(shadow: ShadowRun) -> str:
@@ -534,7 +558,13 @@ def _shared_elements(
         if found.strategy is None or found.raw is None:
             continue
         strategy = strategies[name][found.strategy]
-        if isinstance(strategy, Locating) and (element := strategy.locate(doc)) is not None:
+        if not isinstance(strategy, Locating):
+            continue
+        try:
+            element = strategy.locate(doc)
+        except StrategyTimeout:  # the extractor counted it already
+            continue
+        if element is not None:
             read[name] = (element, found.raw)
     known = anchor.values
     return [

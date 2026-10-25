@@ -76,19 +76,26 @@ class XPathSpec(_Model):
 class RegexSpec(_Model):
     """A regular expression over the text. The first capture group is the value if
     the pattern has one, otherwise the whole match. With `within`, only the text of
-    the first element that selector matches is searched (`Construction · Dunmere`)."""
+    the first element that selector matches is searched (`Construction · Dunmere`).
+
+    `engine` is re (Python's, the default) or re2, which runs in linear time and is
+    what a repair proposed by a provider gets (see scrapemend.extract.patterns)."""
 
     regex: str = Field(min_length=1)
     within: CssSpec | XPathSpec | None = None
+    engine: Literal["re", "re2"] = "re"
 
-    @field_validator("regex")
-    @classmethod
-    def _compiles(cls, value: str) -> str:
-        try:
-            re.compile(value)
-        except re.error as e:
-            raise ValueError(f"invalid regex {value!r}: {e}") from None
-        return value
+    @model_validator(mode="after")
+    def _compiles(self) -> Self:
+        # Imported here: the extract package imports this module.
+        from scrapemend.extract.patterns import problem
+
+        reason = problem(self.regex, self.engine)
+        if reason is not None:
+            if self.engine == "re2":
+                raise ValueError(f"RE2 can't compile {self.regex!r}: {reason}")
+            raise ValueError(f"invalid regex {self.regex!r}: {reason}")
+        return self
 
 
 class LabelOptions(_Model):

@@ -25,6 +25,7 @@ used to miss:
 | `v2-status-enumerates-examples.yaml` | S2 | `status` only knows Open and Closed: 39 of 200 empty |
 | `v2-location-last-word.yaml` | S3b | `location` is the title's last word: 12 of 200 wrong |
 | `v3-location-last-word.yaml` | S3 | the same, on layout v3 |
+| `v2-redos.yaml` | R | a `description` regex that backtracks catastrophically |
 
 Overfitted repairs (strategies that only match the anchors a provider was shown)
 are built in the tests from the shown anchors' values, since which anchors are

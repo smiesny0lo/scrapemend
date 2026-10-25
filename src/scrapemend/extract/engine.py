@@ -1,11 +1,12 @@
 """The extraction engine: run each field's strategies in order and keep the first that works."""
 
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from scrapemend.extract.document import Document
 from scrapemend.extract.normalize import Value, convert
-from scrapemend.extract.strategies import Strategy, build
+from scrapemend.extract.strategies import Strategy, StrategyTimeout, build
 from scrapemend.spec import FieldSpec
 
 
@@ -41,28 +42,36 @@ class Extractor:
             name: (spec, [build(strategy) for strategy in spec.strategies])
             for name, spec in fields.items()
         }
+        # (field, strategy index) -> pages it timed out on, since this extractor was built
+        self.timeouts: Counter[tuple[str, int]] = Counter()
 
     def extract(self, doc: Document) -> RecordResult:
         results = {
-            name: _extract_field(spec, strategies, doc)
+            name: self._extract_field(name, spec, strategies, doc)
             for name, (spec, strategies) in self._fields.items()
         }
         return RecordResult(url=doc.url, fields=results)
 
-
-def _extract_field(spec: FieldSpec, strategies: list[Strategy], doc: Document) -> FieldResult:
-    """The first strategy whose text converts to the field's type wins. Text that
-    doesn't convert (a price reading "See documents") means that strategy found the
-    wrong thing, so the next one gets a chance."""
-    failure: FieldResult | None = None
-    for index, strategy in enumerate(strategies):
-        raw = strategy.extract(doc)
-        if raw is None:
-            continue
-        try:
-            value = convert(raw, spec, base_url=doc.url)
-        except ValueError as e:
-            failure = failure or FieldResult(None, raw, None, f"strategy {index}: {e}")
-            continue
-        return FieldResult(value, raw, index)
-    return failure or FieldResult(None, None, None)
+    def _extract_field(
+        self, name: str, spec: FieldSpec, strategies: list[Strategy], doc: Document
+    ) -> FieldResult:
+        """The first strategy whose text converts to the field's type wins. Text that
+        doesn't convert (a price reading "See documents") means that strategy found the
+        wrong thing, so the next one gets a chance; so does one that timed out."""
+        failure: FieldResult | None = None
+        for index, strategy in enumerate(strategies):
+            try:
+                raw = strategy.extract(doc)
+            except StrategyTimeout as e:
+                self.timeouts[name, index] += 1
+                failure = failure or FieldResult(None, None, None, f"strategy {index}: {e}")
+                continue
+            if raw is None:
+                continue
+            try:
+                value = convert(raw, spec, base_url=doc.url)
+            except ValueError as e:
+                failure = failure or FieldResult(None, raw, None, f"strategy {index}: {e}")
+                continue
+            return FieldResult(value, raw, index)
+        return failure or FieldResult(None, None, None)

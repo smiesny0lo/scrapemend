@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from scrapemend.extract import Document
+from scrapemend.extract import Document, patterns
 from scrapemend.heal.anchors import Anchor
 from scrapemend.heal.pages import PageFailure
 from scrapemend.heal.verify import VerificationReport, verify
@@ -144,6 +144,7 @@ def test_a_working_spec_is_accepted() -> None:
     assert report.accepted, report.problems
     # Every check is listed, with what it covered.
     assert statuses(report) == {
+        "regexes": "passed",
         "listing": "passed",
         "anchors": "passed",
         "sample": "passed",
@@ -426,6 +427,7 @@ def test_without_the_last_good_runs_records_the_shadow_run_cannot_run() -> None:
     assert report.problems == []
     assert not_run(report) == {"shadow run": "the last good run's records are not stored"}
     assert {name for name, status in statuses(report).items() if status == "passed"} == {
+        "regexes",
         "listing",
         "anchors",
         "sample",
@@ -778,3 +780,32 @@ def test_samples_skip_anchor_pages() -> None:
     assert pages.requested[:10] == URLS[:10]  # anchors first
     assert pages.requested[10:20] == URLS[10:20]  # then 10 pages that aren't anchors
     assert pages.requested[20:] == [*URLS, *MORE_URLS[:20]]  # then the shadow run's crawl
+
+
+# --- regexes ----------------------------------------------------------------------------
+
+
+def test_a_regex_that_takes_too_long_rejects_the_repair(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Like review attack R: every value is right, through the fallback, but the regex
+    # backtracks catastrophically on the note's text, and every run would pay for it.
+    monkeypatch.setattr(patterns, "TIME_LIMIT", 0.25)
+    sentence = "The contract covers supply and installation over twelve long months, in Dunmere."
+    noted = {u: html + f"<p class='note'>{sentence}</p>" for u, html in DETAILS.items()}
+    slow = {"regex": r"^(\w+\s?)+$", "within": {"css": ".note"}}
+    candidate = spec(city={"strategies": [slow, {"css": ".city"}]})
+    report = run(candidate, FakePages(noted, listing_for(URLS)))
+    assert report.fields["city"].rate == 1.0
+    assert report.problems == [r"city: regex '^(\\w+\\s?)+$' took longer than 0.25s on 20 pages"]
+    assert statuses(report)["regexes"] == "failed"
+    assert not_run(report) == {"shadow run": "skipped: a quicker check failed"}
+
+
+def test_the_regexes_check_says_which_engine_each_regex_runs_on() -> None:
+    title = {"required": True, "strategies": [{"regex": "^(Title .+)$", "within": {"css": "h1"}}]}
+    city = {"strategies": [{"regex": "(City .+)", "within": {"css": ".city"}, "engine": "re2"}]}
+    report = run(spec(title=title, city=city))
+    assert report.accepted, report.problems
+    assert report.check("regexes").reason == (
+        "2 regexes: 1 on RE2, 1 on Python's re (at most 1s a search)"
+    )
+    assert run(spec()).check("regexes").reason == "no regexes"

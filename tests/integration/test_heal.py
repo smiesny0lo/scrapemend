@@ -8,6 +8,8 @@ against Claude's answers recorded from a live run (tests/fixtures/recorded).
 import os
 import random
 import shutil
+import subprocess
+import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,8 +37,8 @@ from scrapemend.heal.verify import Check, VerificationReport
 from scrapemend.runner import run_source
 from scrapemend.runs import RunReport
 from scrapemend.snapshots import FilesystemSnapshotStore
-from scrapemend.spec import SourceSpec, load_patch, load_spec
-from scrapemend.spec.patch import SpecPatch
+from scrapemend.spec import RegexSpec, SourceSpec, load_patch, load_spec
+from scrapemend.spec.patch import FieldPatch, SpecPatch
 from scrapemend.spec.store import SpecVersion
 from scrapemend.state import State
 from tests.support import FakeClock, RecordedClaude, serve
@@ -476,6 +478,77 @@ def test_a_page_that_did_not_load_is_tried_again_by_promote(world: World) -> Non
     assert promoted.report.shadow.compared == 200
 
 
+# --- regexes ---------------------------------------------------------------------------------
+
+
+def test_a_catastrophic_regex_cannot_hang_heal(world: World) -> None:
+    # Review attack R, hand-written, so on Python's re: each search is stopped after a
+    # second. Without the limit, heal ran for as long as anyone let it. In a subprocess,
+    # so that if the limit ever breaks, this test fails instead of hanging the suite.
+    world.layout(2)
+    world.run()
+    command = [
+        sys.executable,
+        "-m",
+        "scrapemend",
+        "heal",
+        str(DEMO_SPEC),
+        "--patch",
+        str(BAD / "v2-redos.yaml"),
+        "--start",
+        f"{world.site.base_url}/notices",
+        "--db",
+        str(world.db),
+        "--snapshots",
+        str(world.snapshot_dir),
+    ]
+    environment = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    try:
+        done = subprocess.run(
+            command, capture_output=True, encoding="utf-8", env=environment, timeout=60
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("heal was still running after 60 s")
+    assert done.returncode == 3, done.stderr
+    assert "failed   regexes: 2 regexes: 2 on Python's re (at most 1s a search)" in done.stderr
+    assert (
+        r"problem: description: regex '^(\\w+\\s?)+$' took longer than 1s on 20 pages"
+        in done.stderr
+    ), done.stderr
+    assert "not run  shadow run: skipped: a quicker check failed" in done.stderr
+
+
+def test_a_providers_regexes_run_on_re2(world: World) -> None:
+    # The same repair from a provider: its regexes run on RE2, in linear time. This
+    # one never matches the description, and the fallback after it reads it right.
+    world.layout(2)
+    world.run()
+    outcome = world.heal(Scripted(load_patch(BAD / "v2-redos.yaml")))
+    [proposal] = outcome.proposals
+    regex = proposal.patch.fields["description"].strategies[0]
+    assert isinstance(regex, RegexSpec) and regex.engine == "re2"
+    assert proposal.report.check("regexes").reason == "2 regexes: 2 on RE2"
+    assert proposal.status == "accepted", proposal.report.problems
+
+
+def test_a_providers_regex_that_re2_cannot_compile_is_rejected(world: World) -> None:
+    world.layout(2)
+    world.run()
+    correct = load_patch(REPAIRS / "demo-v2.yaml")
+    status = FieldPatch.model_validate({"strategies": [{"regex": r"Status:(?=\s)\s*(\w+)"}]})
+    outcome = world.heal(
+        Scripted(correct.model_copy(update={"fields": correct.fields | {"status": status}}))
+    )
+    assert outcome.status == "quarantined"
+    [proposal] = outcome.proposals
+    [check] = proposal.report.checks  # nothing else ran
+    assert (check.name, check.status) == ("regexes", "failed")
+    assert check.problems == [
+        r"fields.status.strategies[0]: RE2 can't compile 'Status:(?=\\s)\\s*(\\w+)': "
+        "invalid perl operator: (?="
+    ]
+
+
 # --- the ladder's other rungs ---------------------------------------------------------------
 
 
@@ -644,6 +717,7 @@ def test_cli_quarantine_heal_diff_promote_rollback(world: World, tmp_path: Path)
     assert "heal: proposed: proposal 1 passed verification" in healed.output
     # Every check, with what it covered.
     for line in [
+        "passed   regexes: 1 regex: 1 on Python's re (at most 1s a search)",
         "passed   listing: 20 items on the first listing page, 3 listing pages along the "
         "next-page link",
         "passed   anchors: 10 of 10 anchor pages compared; weakest field 100%",

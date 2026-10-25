@@ -1,0 +1,58 @@
+# Review attack R on layout v2: the correct repair, plus a description regex that
+# backtracks catastrophically, ^(\w+\s?)+$, on text it can't match (a sentence with
+# punctuation): stdlib re runs for hours. RE2 runs it in linear time.
+rationale: 'Layout v2 renamed every class (tr.notice -> tr.tender-row, dd.deadline
+  -> dd.tender__closing, ...) and replaced the pager list with rel=next links. The
+  page structure is the same, so new CSS selectors restore every field. Label fallbacks
+  are kept, because the dt/dd labels survived the redesign.
+
+  '
+confidence: 0.9
+container:
+  css: table.tender-table tr.tender-row
+follow:
+  css: a.tender-link::attr(href)
+next_page:
+  css: a[rel=next]::attr(href)
+fields:
+  reference:
+    strategies:
+    - css: dd.tender__ref
+    - label: Reference
+  title:
+    strategies:
+    - css: h1.tender__title
+  authority:
+    strategies:
+    - css: dd.tender__buyer
+    - label: Contracting authority
+  category:
+    strategies:
+    - css: dd.tender__category
+    - label: Category
+  location:
+    strategies:
+    - css: dd.tender__location
+    - label: Location
+  published:
+    strategies:
+    - css: dd.tender__published
+    - label: Published
+  deadline:
+    strategies:
+    - css: dd.tender__closing
+    - label: Deadline
+  value:
+    strategies:
+    - css: dd.tender__amount
+    - regex: "Estimated value:?\\s*(\u20AC\\s?[\\d,.]+)"
+  status:
+    strategies:
+    - css: dd.tender__status
+    - label: Status
+  description:
+    strategies:
+    - regex: ^(\w+\s?)+$
+      within:
+        css: div.tender__description p
+    - css: div.tender__description p

@@ -5,11 +5,17 @@ from lxml import etree
 from scrapemend.extract.document import Document
 
 
+class StrategyTimeout(Exception):
+    """A strategy took too long on a page and was stopped (a regex that backtracks
+    catastrophically). The engine tries the field's next strategy."""
+
+
 class Strategy(Protocol):
     """Finds one field value in a document.
 
     Returns the value as text, or None when nothing (or only whitespace) was found,
-    so the engine can fall through to the field's next strategy.
+    so the engine can fall through to the field's next strategy. May raise
+    StrategyTimeout.
     """
 
     def extract(self, doc: Document) -> str | None: ...
