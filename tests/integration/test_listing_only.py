@@ -19,6 +19,7 @@ from scrapemend.extract import Value
 from scrapemend.fetch import HttpFetcher
 from scrapemend.heal.context import RepairContext
 from scrapemend.heal.ladder import heal, promote
+from scrapemend.heal.pages import PageSource
 from scrapemend.heal.providers import PatchProvider
 from scrapemend.runner import run_source
 from scrapemend.runs import RunReport
@@ -124,7 +125,8 @@ def test_listing_only_spec_heals(world: World, layout: int) -> None:
     assert (proposal.report.anchors_checked, proposal.report.score) == (10, 1.0)
     assert proposal.report.sample == 10  # other items of the first listing page
 
-    promote(world.state, proposal)
+    pages = PageSource(world.snapshots, proposal.source_id, proposal.run_id)
+    promote(world.state, proposal, pages)  # verified again, from the stored pages
     after: list[dict[str, Value]] = []
     healed = world.run(after)
     assert (healed.status, healed.spec_version) == ("ok", 2)

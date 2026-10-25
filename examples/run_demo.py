@@ -126,7 +126,7 @@ def main() -> None:
             scrapemend("diff", str(SPEC), "1", *state[:2])
 
             say("4. Promote it: the repaired spec becomes version 2")
-            scrapemend("promote", str(SPEC), "1", *state[:2])
+            scrapemend("promote", str(SPEC), "1", *state)  # verified again from snapshots
 
             say("5. Scrape the redesigned site again")
             scrapemend("run", str(SPEC), "--out", str(work / "after.jsonl"), *where)

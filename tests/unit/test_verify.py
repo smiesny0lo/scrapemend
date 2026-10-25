@@ -483,6 +483,13 @@ def test_listing_only_broken_key_finds_no_anchors() -> None:
     assert "only 0 of 4 anchors were found on their listing pages" in report.problems
 
 
+def test_needs_the_failed_runs_listing_page() -> None:
+    # E.g. `scrapemend promote` pointed at the wrong snapshot directory: without a
+    # listing page, no listing check could run, so there is no verdict.
+    report = run(spec(), FakePages(DETAILS, listing=None))
+    assert report.problems == ["no listing page of the failed run to verify against"]
+
+
 def test_needs_anchors() -> None:
     assert "no anchors to verify against" in run(spec(), anchors=[]).problems[0]
 

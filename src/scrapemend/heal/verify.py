@@ -120,6 +120,8 @@ def verify(
         problems += walk_problems
         for page in seen:
             rows.add(page)
+    else:
+        problems.append("no listing page of the failed run to verify against")
 
     # 2. anchors
     checks = {name: FieldCheck(volatile=f.volatile) for name, f in spec.fields.items()}

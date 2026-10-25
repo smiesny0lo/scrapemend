@@ -11,7 +11,7 @@
 | `scrapemend heal SPEC [--provider P \| --patch FILE]` | repair the latest failed run, verify the repair, promote it or leave it for review |
 | `scrapemend proposals SPEC` | repair proposals with their verification score |
 | `scrapemend diff SPEC ID` | what proposal ID would change, as a diff of the spec |
-| `scrapemend promote SPEC ID` | make a verified proposal the active version |
+| `scrapemend promote SPEC ID [--force]` | verify proposal ID again and make it the active version; a proposal made for another version than the active one is refused, unless `--force` applies it to the active version (verified again too) |
 | `scrapemend rollback SPEC [--to N]` | make an older version active again |
 | `scrapemend versions SPEC` / `show SPEC` | stored versions / one version as YAML |
 

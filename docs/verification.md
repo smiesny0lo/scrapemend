@@ -110,6 +110,8 @@ scrapemend diff SPEC ID      # review it
 scrapemend promote SPEC ID   # accept it
 ```
 
+`promote` runs the gate again before anything changes, against the current anchors and the failed run's stored pages (pass the same `--snapshots` as the run). The anchors may have been refreshed since, or the proposal accepted by an older version of the gate; one that no longer passes is marked rejected and not promoted (exit code 3). A proposal made for another spec version than the active one is refused; `--force` applies it to the active version instead, and verifies that.
+
 If no repair passes, the source is quarantined, and a `repair_rejected` or `quarantined` event goes to the notifiers you configured with `--notify`. The rejected proposals stay stored, so a human can see what was tried and why it failed.
 
 `blocked`, `transient` and `drift` are never repaired: the site refused or failed us, or real-world data changed. That isn't something a selector should fix.
