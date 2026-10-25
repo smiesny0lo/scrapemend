@@ -176,11 +176,24 @@ class FieldSpec(_Model):
     normalize: tuple[Normalizer, ...] = ()  # applied in order before type conversion
     date_format: str | None = None  # strptime format; only for type: date
     null_values: tuple[str, ...] = ()  # texts meaning "no value", e.g. "N/A" (any case)
+    pattern: str | None = None  # regex the whole value must match; str and url fields only
+
+    @field_validator("pattern")
+    @classmethod
+    def _pattern_compiles(cls, value: str | None) -> str | None:
+        if value is not None:
+            try:
+                re.compile(value)
+            except re.error as e:
+                raise ValueError(f"invalid pattern {value!r}: {e}") from None
+        return value
 
     @model_validator(mode="after")
-    def _date_format_needs_date(self) -> Self:
+    def _options_match_type(self) -> Self:
         if self.date_format is not None and self.type != "date":
             raise ValueError("date_format only applies to fields with type: date")
+        if self.pattern is not None and self.type not in ("str", "url"):
+            raise ValueError("pattern only applies to fields with type: str or url")
         return self
 
 
@@ -217,6 +230,8 @@ class ExpectSpec(_Model):
 class HealSpec(_Model):
     mode: Literal["off", "propose", "auto"] = "propose"
     anchors: int = Field(default=10, ge=0)  # known-good records kept for verification
+    # Share of anchor values every field must reproduce for a repair to be accepted.
+    threshold: float = Field(default=0.9, gt=0, le=1)
 
 
 # --- source ---------------------------------------------------------------------------

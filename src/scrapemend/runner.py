@@ -1,0 +1,167 @@
+"""One judged run of a source: crawl, validate, compare with the last good run,
+classify, record, notify."""
+
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
+
+from scrapemend.detect.classify import Diagnosis, Evidence, classify, diagnose, worst
+from scrapemend.detect.fingerprint import similarity
+from scrapemend.events import Event, EventKind, Notifier
+from scrapemend.extract import FieldResult
+from scrapemend.extract.select import find_link
+from scrapemend.fetch import Fetcher, FetchError
+from scrapemend.pipeline import RunAborted, RunSummary, SourceRun, ValidatedRecord
+from scrapemend.runs import RunMode, RunReport, RunStore
+from scrapemend.snapshots import SnapshotStore
+from scrapemend.spec import SourceSpec
+from scrapemend.validate import validate_batch
+
+PROBE_PAGES = 3  # known detail pages re-checked when the listing yields nothing
+
+FieldValues = dict[str, tuple[object, int | None]]  # field -> (value, winning strategy)
+
+
+def run_source(
+    spec: SourceSpec,
+    fetcher: Fetcher,
+    snapshots: SnapshotStore,
+    runs: RunStore,
+    *,
+    mode: RunMode = "run",
+    limit: int | None = None,
+    keep_invalid: bool = False,
+    on_record: Callable[[ValidatedRecord], None] | None = None,
+    notifier: Notifier | None = None,
+) -> RunReport:
+    """Crawl a source and judge the result.
+
+    Valid records are passed to `on_record` as they arrive (invalid ones too with
+    `keep_invalid`). Only a complete, good run of mode "run" becomes the new baseline.
+    """
+    started = datetime.now(UTC)
+    previous = runs.latest(spec.id)
+    baseline_report = runs.last_good(spec.id)
+    baseline = baseline_report.summary if baseline_report else None
+
+    crawl = SourceRun(spec, fetcher, snapshots, limit=limit)
+    error: BaseException | None = None
+    try:
+        for record in crawl.records():
+            if on_record is not None and (record.valid or keep_invalid):
+                on_record(record)
+    except (FetchError, RunAborted) as e:
+        error = e
+    summary = crawl.summary
+    complete = error is None and limit is None and mode == "run"
+
+    diagnosis = None
+    next_link_missing = False
+    listing_text = None
+    if error is None and crawl.first_listing is not None:
+        listing_text = crawl.first_listing.text
+        paginate = spec.fetch.paginate
+        stopped_early = summary.listing_pages == 1 and (limit is None or summary.items < limit)
+        if paginate and baseline and baseline.listing_pages > 1 and stopped_early:
+            next_link_missing = find_link(paginate.next, crawl.first_listing) is None
+        if summary.items == 0 and baseline_report is not None:
+            diagnosis = _diagnose(crawl, snapshots, baseline_report)
+
+    # After the probes, so probed detail pages count as structural evidence too.
+    structure = _structure(runs, spec.id, summary)
+    violations = validate_batch(
+        summary.valid_records, summary.fields, spec.expect, complete=complete
+    )
+    failures, warnings = classify(
+        Evidence(
+            spec=spec,
+            summary=summary,
+            complete=complete,
+            error=error,
+            structure=structure,
+            baseline=baseline,
+            violations=violations,
+            diagnosis=diagnosis,
+            listing_text=listing_text,
+            next_link_missing=next_link_missing,
+        )
+    )
+    report = RunReport(
+        run_id=summary.run_id,
+        source_id=spec.id,
+        spec_version=spec.version,
+        mode=mode,
+        status=worst(failures),
+        started_at=started,
+        finished_at=datetime.now(UTC),
+        complete=complete,
+        summary=summary,
+        failures=failures,
+        warnings=warnings,
+        structure=structure,
+        diagnosis=diagnosis,
+        error=str(error) if error else None,
+    )
+    runs.save(report)
+    if mode == "run" and complete and report.good:
+        for kind, prints in summary.fingerprints.items():
+            if prints:
+                runs.set_baseline(spec.id, kind, prints[0], summary.run_id)
+    if notifier is not None:
+        _notify(notifier, report, previous)
+    return report
+
+
+def _structure(runs: RunStore, source_id: str, summary: RunSummary) -> dict[str, float]:
+    """Per page kind, the lowest similarity of this run's pages to the baseline."""
+    structure = {}
+    for kind, prints in summary.fingerprints.items():
+        baseline = runs.baseline(source_id, kind)
+        if baseline and prints:
+            structure[kind] = min(similarity(fp, baseline) for fp in prints)
+    return structure
+
+
+def _diagnose(crawl: SourceRun, snapshots: SnapshotStore, baseline: RunReport) -> Diagnosis | None:
+    """Re-check detail pages from the last good run: what did the spec read there
+    then (from the stored snapshot), and what does it read now (fetched fresh)?"""
+    before: dict[str, FieldValues] = {}
+    for snapshot_id in snapshots.snapshots(baseline.source_id, baseline.run_id):
+        snapshot = snapshots.get(snapshot_id)
+        if snapshot.kind != "detail" or snapshot.status != 200:
+            continue
+        before[snapshot.url] = _values(crawl.extractor.extract(snapshot.document()).fields)
+        if len(before) == PROBE_PAGES:
+            break
+    if not before:
+        return None
+    now = {url: _values(record.fields) for url, record in crawl.probe(before)}
+    return diagnose(crawl.spec, before, now)
+
+
+def _values(fields: Mapping[str, FieldResult]) -> FieldValues:
+    return {name: (f.value, f.strategy) for name, f in fields.items()}
+
+
+def _notify(notifier: Notifier, report: RunReport, previous: RunReport | None) -> None:
+    def send(kind: EventKind, message: str) -> None:
+        notifier.notify(
+            Event(
+                kind=kind,
+                source_id=report.source_id,
+                message=message,
+                run_id=report.run_id,
+                status=report.status,
+            )
+        )
+
+    if report.status == "drift":
+        for failure in report.failures:
+            send("drift", failure.message)
+    elif not report.good:
+        first = report.failures[0]
+        fields = f" (failing: {', '.join(first.fields)})" if first.fields else ""
+        send("run_failed", f"{first.category}: {first.message}{fields}")
+    elif previous is not None and not previous.good:
+        send("run_recovered", f"good again after {previous.status} in run {previous.run_id}")
+    for warning in report.warnings:
+        send("warning", warning)

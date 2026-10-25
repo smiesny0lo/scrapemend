@@ -29,7 +29,15 @@ scrapemend validate examples/sources/demo.yaml
 scrapemend run examples/sources/demo.yaml --out records.jsonl
 ```
 
-Records are written as JSON lines; a summary (pages, records, failures, fallback strategies used) goes to stderr. Every downloaded page is kept under `snapshots/` so it can be re-parsed later without fetching it again.
+Records are written as JSON lines; a report goes to stderr. Every downloaded page is kept under `snapshots/` so it can be re-parsed later without fetching it again, and each run is judged against the last good one (stored in `scrapemend.db`):
+
+| Status | Meaning | Exit code |
+|---|---|---|
+| `ok`, `drift` | data is fine (`drift`: it parses, but looks different from last time) | 0 |
+| `blocked`, `transient` | the site refused us or kept failing; never worked around | 2 |
+| `layout_changed`, `empty`, `partial` | the data is broken; the report names the failing fields | 3 |
+
+Switch the demo site to another layout (`curl -X POST http://127.0.0.1:8000/admin/layout/2`) and run again to see `layout_changed`. `scrapemend check <spec>` samples 5 items without touching the baseline; `scrapemend runs` lists the history.
 
 ## Development
 

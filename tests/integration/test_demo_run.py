@@ -106,7 +106,7 @@ def test_stored_snapshots_reparse_without_refetching(clock: FakeClock, tmp_path:
         for i in store.snapshots("tenders-demo", source_run.summary.run_id)
         if store.get(i).kind == "detail"
     ]
-    reparsed = [source_run._extractor.extract(s.document()).record for s in details]
+    reparsed = [source_run.extractor.extract(s.document()).record for s in details]
     assert reparsed == live
 
 
@@ -181,7 +181,8 @@ def test_cli_run_writes_jsonl(clock: FakeClock, tmp_path: Path) -> None:
         result = runner.invoke(
             cli,
             ["run", str(DEMO_SPEC_PATH), "--start", f"{base_url}/notices", "--limit", "5",
-             "--out", str(out), "--snapshots", str(tmp_path / "snapshots")],
+             "--out", str(out), "--snapshots", str(tmp_path / "snapshots"),
+             "--db", str(tmp_path / "state.db")],
         )  # fmt: skip
     assert result.exit_code == 0, result.output
     lines = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
@@ -190,7 +191,8 @@ def test_cli_run_writes_jsonl(clock: FakeClock, tmp_path: Path) -> None:
     assert first["reference"].startswith("TN-2026-")
     assert first["deadline"] == first["deadline"][:10]  # ISO date string
     assert first["value"] is None or first["value"].replace(".", "").isdigit()
-    assert "1 listing pages, 5 items, 5 records, 0 failed" in result.output
+    assert "1 listing pages, 5 items, 5 records, 0 invalid, 0 failed" in result.output
+    assert "status: ok" in result.output
 
 
 def test_cli_run_to_stdout(clock: FakeClock, tmp_path: Path) -> None:
@@ -198,7 +200,7 @@ def test_cli_run_to_stdout(clock: FakeClock, tmp_path: Path) -> None:
         result = runner.invoke(
             cli,
             ["run", str(DEMO_SPEC_PATH), "--start", f"{base_url}/notices", "--limit", "2",
-             "--snapshots", str(tmp_path)],
+             "--snapshots", str(tmp_path), "--db", str(tmp_path / "state.db")],
         )  # fmt: skip
     assert result.exit_code == 0, result.output
     records = [json.loads(line) for line in result.stdout.splitlines()]
@@ -210,13 +212,16 @@ def test_cli_run_exits_2_when_blocked(clock: FakeClock, tmp_path: Path) -> None:
         result = runner.invoke(
             cli,
             ["run", str(DEMO_SPEC_PATH), "--start", f"{base_url}/notices",
-             "--snapshots", str(tmp_path)],
+             "--snapshots", str(tmp_path), "--db", str(tmp_path / "state.db")],
         )  # fmt: skip
     assert result.exit_code == 2
-    assert "run aborted: blocked by the site" in result.output
+    assert "status: blocked" in result.output
+    assert "HTTP 403" in result.output
 
 
 def test_cli_run_rejects_a_bad_start_url(tmp_path: Path) -> None:
-    result = runner.invoke(cli, ["run", str(DEMO_SPEC_PATH), "--start", "not a url"])
+    result = runner.invoke(
+        cli, ["run", str(DEMO_SPEC_PATH), "--start", "not a url", "--db", str(tmp_path / "s.db")]
+    )
     assert result.exit_code == 1
     assert "--start" in result.output
