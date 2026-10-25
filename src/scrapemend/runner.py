@@ -39,7 +39,7 @@ def run_source(
 
     Valid records are passed to `on_record` as they arrive (invalid ones too with
     `keep_invalid`). Only a complete, good run of mode "run" becomes the new baseline
-    and refreshes the source's anchors.
+    and refreshes the source's anchors and known records.
     """
     runs = state.runs
     started = datetime.now(UTC)
@@ -118,7 +118,7 @@ def run_source(
         for kind, prints in summary.fingerprints.items():
             if prints:
                 runs.set_baseline(spec.id, kind, prints[0], summary.run_id)
-        state.anchors.replace(spec.id, picker.anchors())
+        state.anchors.replace(spec.id, picker.anchors(), picker.records())
     if notifier is not None:
         _notify(notifier, report, previous)
     return report

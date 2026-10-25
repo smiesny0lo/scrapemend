@@ -1,5 +1,6 @@
 """The verification gate's rules, on small hand-built pages."""
 
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -55,16 +56,25 @@ MORE = {
 
 class FakePages:
     def __init__(
-        self, details: dict[str, str], listing: str | None = None, more: dict[str, str] = MORE
+        self,
+        details: dict[str, str],
+        listing: str | None = None,
+        more: dict[str, str] = MORE,
+        stored: list[str] | None = None,
     ) -> None:
         self.details = details
         self.first = listing
         self.more = more
+        self.stored = stored or []  # the detail pages the failed run stored
         self.requested: list[str] = []
         self.listings: list[str] = []
 
     def listing_pages(self) -> list[Document]:
         return [Document.parse(self.first, url=f"{BASE}/list")] if self.first is not None else []
+
+    def detail_pages(self) -> Iterator[Document]:
+        for url in self.stored:
+            yield Document.parse(self.details[url], url=url)
 
     def listing(self, url: str) -> Document | None:
         self.listings.append(url)
@@ -251,6 +261,106 @@ def test_stable_fields_must_match_every_anchor_by_default() -> None:
     assert report.threshold == 1.0
     assert report.problems == [
         "city reproduces 9/10 anchor values (needs 100%); expected 'City 1', got None"
+    ]
+
+
+# --- the failed run's stored pages ---------------------------------------------------
+
+KNOWN = {a.key: a.values for a in anchors_for(DETAILS, URLS)}  # the last good run's records
+
+
+def stored(details: dict[str, str] = DETAILS) -> FakePages:
+    """A failed run that stored every detail page."""
+    return FakePages(details, listing_for(URLS), stored=list(details))
+
+
+def test_every_stored_record_the_last_good_run_had_is_compared() -> None:
+    # A notice new since the last good run has no values to compare.
+    new = f"{BASE}/d/99"
+    pages = FakePages(DETAILS | {new: detail("Title 99", "City 3", "99")}, listing_for(URLS))
+    pages.stored = [*URLS, new]
+    report = run(spec(), pages, known=KNOWN)
+    assert report.accepted, report.problems
+    assert report.run_records == 30
+    assert {name: check.rate for name, check in report.run_fields.items()} == {
+        "title": 1.0,
+        "city": 1.0,
+        "price": 1.0,
+    }
+    assert report.notes == []
+    assert pages.requested == URLS[:20]  # anchors and sample; stored pages aren't fetched
+
+
+def test_a_field_wrong_where_no_anchor_or_sample_looks_is_rejected() -> None:
+    # Page 25 is neither an anchor (pages 0-9) nor in the sample (10-19).
+    cities = {
+        u: html.replace("class='city'", "class='town'") if i == 25 else html
+        for i, (u, html) in enumerate(DETAILS.items())
+    }
+    assert run(spec(), FakePages(cities, listing_for(URLS))).accepted  # anchors alone miss it
+    report = run(spec(), stored(cities), known=KNOWN)
+    assert report.problems == [
+        "city reproduces 29/30 values of the last good run (needs 100%); "
+        "expected 'City 1', got None"
+    ]
+
+
+@pytest.mark.parametrize(("changed", "accepted"), [(12, True), (13, False)])
+def test_volatile_fields_must_match_most_stored_records(changed: int, accepted: bool) -> None:
+    # New prices on pages past the anchors: 18 of 30 still match (60%), 17 don't.
+    prices = {
+        u: new_price(html) if 10 <= i < 10 + changed else html
+        for i, (u, html) in enumerate(DETAILS.items())
+    }
+    report = run(spec(), stored(prices), known=KNOWN)
+    assert report.fields["price"].rate == 1.0
+    assert report.accepted is accepted
+    if not accepted:
+        assert report.problems == [
+            "price reproduces 17/30 values of the last good run (needs 60% for a volatile "
+            "field); expected '10', got '910'"
+        ]
+
+
+def test_a_volatile_field_with_few_values_must_keep_reading_them_on_stored_pages() -> None:
+    # Right on the anchors and the sample (pages 0-19), wrong on most of the other
+    # stored pages. The last good run's records hold no status to compare exactly.
+    details = {
+        u: html + f"<p class='status'>{'Open' if i < 20 else 'Works'}</p>"
+        for i, (u, html) in enumerate(page_set(60).items())
+    }
+    known = {a.key: a.values for a in anchors_for(details, list(details))}
+    candidate = spec(status={"volatile": True, "strategies": [{"css": ".status"}]})
+    pages = FakePages(details, listing_for(URLS), stored=list(details))
+    report = run(candidate, pages, known=known, baseline=with_statuses("Open", "Closed"))
+    assert report.problems == [
+        "status reads values the last good run never had on 40 of 60 stored pages "
+        "(e.g. 'Works'; it had: Closed, Open)"
+    ]
+
+
+def test_with_few_stored_records_only_anchors_are_compared() -> None:
+    # A failed run that never reached the detail pages stores only those it probed.
+    cities = {
+        u: html.replace("class='city'", "class='town'") if i == 25 else html
+        for i, (u, html) in enumerate(DETAILS.items())
+    }
+    pages = FakePages(cities, listing_for(URLS), stored=[*URLS[:3], URLS[25]])
+    report = run(spec(), pages, known=KNOWN)
+    assert report.accepted, report.problems
+    assert (report.run_records, report.run_fields) == (4, {})
+    assert report.notes == [
+        "only 4 records on the failed run's stored pages are known from the last good run "
+        "(needs 20), so known values were compared on the anchors only"
+    ]
+
+
+def test_without_the_last_good_runs_records_only_anchors_are_compared() -> None:
+    report = run(spec(), stored())
+    assert report.accepted, report.problems
+    assert report.notes == [
+        "the last good run's records are not stored, "
+        "so known values were compared on the anchors only"
     ]
 
 
@@ -476,6 +586,20 @@ def test_listing_only_items_must_have_a_key() -> None:
     pages = FakePages({}, "<ul><li>Ref - Name</li></ul>" + rows(range(20), "?page=2"), ROWS)
     report = verify(listing_spec(), ROW_ANCHORS, pages, baseline=BASELINE)
     assert report.problems == ["only 20 of 21 items have a key (ref)"]
+
+
+def test_listing_only_compares_the_items_of_the_stored_listing_pages() -> None:
+    # R15 is on the first listing page, but neither an anchor nor in the sample.
+    first = rows(range(20), "?page=2").replace("Name 15", "Name 15b")
+    known = {f"R{i}": {"ref": f"R{i}", "name": f"Name {i}"} for i in range(80)}
+    pages = FakePages({}, first, ROWS)
+    report = verify(listing_spec(), ROW_ANCHORS, pages, baseline=BASELINE, known=known)
+    assert report.run_records == 20
+    assert report.problems == [
+        "name reproduces 19/20 values of the last good run (needs 100%); "
+        "expected 'Name 15', got 'Name 15b'"
+    ]
+    assert pages.requested == []
 
 
 def test_listing_only_broken_key_finds_no_anchors() -> None:

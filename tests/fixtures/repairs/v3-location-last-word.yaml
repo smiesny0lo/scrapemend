@@ -1,7 +1,7 @@
 # Review attack 3b on layout v3: the correct repair, except that location is the last
 # word of the title ("Street sweeping - Ashgrove"). That is right for every place
-# but Fenwick Vale, 12 of 200 notices, so it reproduces 9 of 10 anchors when one of
-# them is there: enough for a 90% threshold.
+# but Fenwick Vale, 12 of 200 notices, so ten anchors often miss it; the records on
+# the failed run's stored pages don't.
 rationale: v3 merged fields into text lines; regexes and labels.
 confidence: 0.8
 container: { css: "div.grid > div.rounded-lg" }

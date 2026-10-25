@@ -4,7 +4,15 @@ from pathlib import Path
 from typing import Any
 
 from scrapemend.extract import FieldResult, RecordResult
-from scrapemend.heal.anchors import Anchor, AnchorPicker, AnchorStore, encode, key_of, split
+from scrapemend.heal.anchors import (
+    Anchor,
+    AnchorPicker,
+    AnchorStore,
+    AnchorValue,
+    encode,
+    key_of,
+    split,
+)
 from scrapemend.pipeline import ValidatedRecord
 from scrapemend.state import connect
 from scrapemend.validate import Violation
@@ -64,6 +72,30 @@ def test_skips_invalid_duplicate_and_keyless_records() -> None:
     records = [record(1, valid=False), record(2), record(2)]
     assert picked(10, records) == ["TN-0002"]
     assert picked(0, records) == []
+
+
+def test_keeps_the_values_of_every_valid_record() -> None:
+    picker = AnchorPicker(1, "reference", "run")
+    for r in [record(1, valid=False), record(2, value=Decimal("5.00")), record(2), record(3)]:
+        picker.add(r)
+    assert len(picker.anchors()) == 1
+    assert picker.records() == {
+        "TN-0002": {"reference": "TN-0002", "value": "5"},
+        "TN-0003": {"reference": "TN-0003"},
+    }
+
+
+def test_store_replaces_the_records_with_the_anchors(tmp_path: Path) -> None:
+    store = AnchorStore(connect(tmp_path / "state.db"))
+    records: dict[str, dict[str, AnchorValue]] = {
+        "k1": {"title": "A", "count": 3, "value": None},
+        "k2": {"title": "B"},
+    }
+    store.replace("demo", [], records)
+    assert store.records("demo") == records
+    store.replace("demo", [])  # a good run that kept no records leaves none of the old ones
+    assert store.records("demo") == {}
+    assert store.records("other") == {}
 
 
 def test_store_replaces_and_keeps_order(tmp_path: Path) -> None:

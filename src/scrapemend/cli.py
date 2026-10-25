@@ -577,6 +577,8 @@ def _print_heal(outcome: HealOutcome) -> None:
             err(f"    changes: {', '.join(p.patch.changes())}")
         for problem in p.report.problems[:5]:
             err(f"    problem: {problem}")
+        for note in p.report.notes:
+            err(f"    note: {note}")
 
 
 def _print_report(report: RunReport, fetcher: HttpFetcher, snapshots: Path) -> None:

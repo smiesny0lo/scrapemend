@@ -108,6 +108,7 @@ def heal(
         )
 
     baseline = state.runs.last_good(spec.id)
+    known = state.anchors.records(spec.id)
     pages = PageSource(
         snapshots, spec.id, failed.run_id, fetcher=fetcher, spec_version=spec.version
     )
@@ -129,7 +130,11 @@ def heal(
             report = _unusable(spec, anchors, f"the patch does not fit the spec: {e}")
         else:
             report = verify(
-                candidate, anchors, pages, baseline=baseline.summary if baseline else None
+                candidate,
+                anchors,
+                pages,
+                baseline=baseline.summary if baseline else None,
+                known=known,
             )
         proposal = state.proposals.add(
             spec.id, spec.version, failed.run_id, provider.name, patch, report
@@ -227,7 +232,11 @@ def promote(state: State, proposal: Proposal, pages: Pages, *, force: bool = Fal
         ) from None
     baseline = state.runs.last_good(source_id)
     report = verify(
-        spec, state.anchors.all(source_id), pages, baseline=baseline.summary if baseline else None
+        spec,
+        state.anchors.all(source_id),
+        pages,
+        baseline=baseline.summary if baseline else None,
+        known=state.anchors.records(source_id),
     )
     state.proposals.reverified(proposal.id, report)
     if not report.accepted:

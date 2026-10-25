@@ -1,4 +1,5 @@
-"""Local state in one SQLite file: runs, baselines, anchors, spec versions, proposals.
+"""Local state in one SQLite file: runs, baselines, anchors and the last good run's
+records, spec versions, proposals.
 
 Every table is created on first use, so an older database simply gains the tables
 a newer version needs. Stores share one connection; each write commits at once.
@@ -34,6 +35,13 @@ CREATE TABLE IF NOT EXISTS anchors (
     rank      INTEGER NOT NULL,      -- stable order: by hash of the key
     key       TEXT NOT NULL,
     anchor    TEXT NOT NULL,         -- the Anchor as JSON
+    PRIMARY KEY (source_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS good_records (
+    source_id TEXT NOT NULL,
+    key       TEXT NOT NULL,
+    fields    TEXT NOT NULL,         -- field -> value as anchors store it, as JSON
     PRIMARY KEY (source_id, key)
 );
 

@@ -1,5 +1,6 @@
 """Pages under the current layout, for diagnosing and verifying repairs."""
 
+from collections.abc import Iterator
 from typing import Protocol
 
 from scrapemend.extract import Document
@@ -10,6 +11,10 @@ from scrapemend.snapshots import Snapshot, SnapshotKind, SnapshotStore
 class Pages(Protocol):
     def listing_pages(self) -> list[Document]:
         """The listing pages the failed run stored, its first page first."""
+        ...
+
+    def detail_pages(self) -> Iterator[Document]:
+        """The detail pages the failed run stored, one at a time: never fetched."""
         ...
 
     def listing(self, url: str) -> Document | None:
@@ -51,11 +56,19 @@ class PageSource:
             if snapshot.kind == "listing":
                 self._listings.append(snapshot_id)
             self._stored.setdefault((snapshot.kind, snapshot.url), snapshot_id)
+        self._details = [i for (kind, _), i in self._stored.items() if kind == "detail"]
 
     def listing_pages(self) -> list[Document]:
         """The listing pages stored for the run when this source was made, in the
         order they were fetched: the run's own, then any an earlier verification added."""
         return [self.snapshots.get(i).document() for i in self._listings]
+
+    def detail_pages(self) -> Iterator[Document]:
+        """The detail pages stored for the run when this source was made, one per URL,
+        in the order they were fetched, parsed one at a time: a run may have stored
+        thousands."""
+        for snapshot_id in self._details:
+            yield self.snapshots.get(snapshot_id).document()
 
     def listing(self, url: str) -> Document | None:
         """A listing page: stored if the run has it, else fetched now; None if it fails."""

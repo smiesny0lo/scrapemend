@@ -18,11 +18,19 @@ A candidate is judged on pages under the current layout, never on its own say-so
    field can't hide behind nine correct ones. And no two fields may read the same
    text from the same element where their known values differ: one of them reads
    the wrong thing.
-3. Sample: on other detail pages, which nobody has known values for, are required
+3. The failed run's pages: every record on the pages the failed run stored (its
+   detail pages, or without them the items of its listing pages) whose key the last
+   good run had too must reproduce that run's values, by the anchors' rules: stable
+   fields on heal.threshold of them, volatile ones on heal.volatile_match, and
+   volatile ones with few values (a status) mostly reading values from that set.
+   Nothing is fetched for this. With fewer than MIN_RUN_RECORDS such records, as
+   when the run never reached the detail pages, only the anchors are compared, and
+   the report notes it.
+4. Sample: on other detail pages, which nobody has known values for, are required
    fields filled, and do fields that differ between anchors still differ? A
    strategy that only matches the examples it was shown leaves fields empty or
    constant there.
-4. Known values: a field that took only a few values in the last good run (a
+5. Known values: a field that took only a few values in the last good run (a
    status, a category) must mostly read values from that set, on anchor and sample
    pages alike.
 
@@ -30,7 +38,7 @@ Accepted only if there is no problem at all.
 """
 
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from itertools import combinations
 
 from lxml import etree
@@ -39,12 +47,13 @@ from pydantic import BaseModel, Field
 from scrapemend.extract import Document, Extractor, RecordResult
 from scrapemend.extract.select import find_link, select_all
 from scrapemend.extract.strategies import Locating, Strategy, build
-from scrapemend.heal.anchors import Anchor, AnchorValue, encode
+from scrapemend.heal.anchors import Anchor, AnchorValue, KnownRecords, encode, key_of
 from scrapemend.heal.pages import Pages
 from scrapemend.pipeline import RunSummary
 from scrapemend.spec import SourceSpec
 
 MIN_ANCHORS = 3  # anchor pages that must load for a verdict (all of them, if fewer)
+MIN_RUN_RECORDS = 20  # known records on the failed run's pages needed to compare them
 SAMPLE_PAGES = 10  # non-anchor detail pages checked for plausibility
 PAGINATION_HOPS = 2  # next-page links followed from the first listing page
 MAX_REPEATED_SHARE = 0.5  # of a listing page's items that may already have been seen
@@ -80,7 +89,10 @@ class VerificationReport(BaseModel):
     listing_links: int | None = None  # of those, items with a key (their detail link)
     listing_pages: int | None = None  # listing pages seen: the first, then along the next link
     sample: int = 0  # non-anchor pages checked
+    run_records: int = 0  # records on the failed run's stored pages the last good run had
+    run_fields: dict[str, FieldCheck] = Field(default_factory=dict)  # empty: not compared
     problems: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)  # what limited the verdict, if anything
 
     @property
     def score(self) -> float:
@@ -95,7 +107,10 @@ def verify(
     *,
     threshold: float | None = None,
     baseline: RunSummary | None = None,
+    known: KnownRecords | None = None,
 ) -> VerificationReport:
+    """`known` holds the values of the last good run's records, by key (see
+    AnchorStore.records); without them, only the anchors' values are compared."""
     threshold = spec.heal.threshold if threshold is None else threshold
     volatile_match = spec.heal.volatile_match
     extractor = Extractor(spec.fields)
@@ -136,15 +151,7 @@ def verify(
             continue
         result = extractor.extract(doc)
         checked.append(result)
-        for name, check in checks.items():
-            if name not in anchor.values:
-                continue
-            expected, got = anchor.values[name], encode(result.fields[name].value)
-            check.compared += 1
-            if expected == got:
-                check.matched += 1
-            elif len(check.mismatches) < 3:
-                check.mismatches.append(Mismatch(url=anchor.url, expected=expected, got=got))
+        _compare(checks, anchor.values, result, anchor.url)
         shared.update(_shared_elements(strategies, anchor, result, doc))
     if not anchors:
         problems.append("no anchors to verify against: the source has had no good run yet")
@@ -154,32 +161,50 @@ def verify(
             if spec.item.follow
             else f"only {len(checked)} of {len(anchors)} anchors were found on their listing pages"
         )
-    for name, check in checks.items():
-        needed = volatile_match if check.volatile else threshold
-        if check.compared and check.rate < needed:
-            example = check.mismatches[0]
-            kind = " for a volatile field" if check.volatile else ""
-            problems.append(
-                f"{name} reproduces {check.matched}/{check.compared} anchor values "
-                f"(needs {needed:.0%}{kind}); expected {example.expected!r}, got {example.got!r}"
-            )
+    problems += _rate_problems(checks, threshold, volatile_match, "anchor values")
     for (a, b), count in shared.items():
         problems.append(
             f"{a} and {b} read the same element on {count} of {len(checked)} anchor pages"
         )
 
-    # 3. sample: other items of the first listing page (their detail pages, if any)
-    known = {a.url for a in anchors} if spec.item.follow else {a.key for a in anchors}
-    others = [(key, item) for key, item in items if key is not None and key not in known]
+    # 3. the failed run's pages: every record on them that the last good run had too
+    unit = "pages" if spec.item.follow else "items"
+    run = _run_records(spec, pages, extractor, known or {})
+    run_fields: dict[str, FieldCheck] = {}
+    notes: list[str] = []
+    if not known:
+        notes.append(
+            "the last good run's records are not stored, "
+            "so known values were compared on the anchors only"
+        )
+    elif len(run) < MIN_RUN_RECORDS:
+        where = "pages" if spec.item.follow else "listing pages"
+        notes.append(
+            f"only {len(run)} records on the failed run's stored {where} are known from the "
+            f"last good run (needs {MIN_RUN_RECORDS}), "
+            "so known values were compared on the anchors only"
+        )
+    else:
+        run_fields = {name: FieldCheck(volatile=f.volatile) for name, f in spec.fields.items()}
+        for key, result in run:
+            _compare(run_fields, known[key], result, result.url)
+        what = "values of the last good run"
+        problems += _rate_problems(run_fields, threshold, volatile_match, what)
+        volatile = [name for name, f in spec.fields.items() if f.volatile]
+        records = [result for _, result in run]
+        problems += _value_problems(spec, baseline, records, f"stored {unit}", volatile)
+
+    # 4. sample: other items of the first listing page (their detail pages, if any)
+    anchored = {a.url for a in anchors} if spec.item.follow else {a.key for a in anchors}
+    others = [(key, item) for key, item in items if key is not None and key not in anchored]
     sample: list[RecordResult] = []
     for key, item in others[:SAMPLE_PAGES]:
         doc = pages.page(key) if spec.item.follow else item
         if doc is not None:
             sample.append(extractor.extract(doc))
-    unit = "pages" if spec.item.follow else "items"
     problems += _sample_problems(spec, anchors, sample, unit)
 
-    # 4. known values
+    # 5. known values
     problems += _value_problems(spec, baseline, checked + sample, unit)
 
     return VerificationReport(
@@ -193,8 +218,70 @@ def verify(
         listing_links=listing_links,
         listing_pages=listing_pages,
         sample=len(sample),
+        run_records=len(run),
+        run_fields=run_fields,
         problems=problems,
+        notes=notes,
     )
+
+
+def _compare(
+    checks: Mapping[str, FieldCheck],
+    expected: Mapping[str, AnchorValue],
+    result: RecordResult,
+    url: str | None,
+) -> None:
+    """Count, per field, whether a record reproduces its known values."""
+    for name, check in checks.items():
+        if name not in expected:
+            continue
+        want, got = expected[name], encode(result.fields[name].value)
+        check.compared += 1
+        if want == got:
+            check.matched += 1
+        elif len(check.mismatches) < 3:
+            check.mismatches.append(Mismatch(url=url, expected=want, got=got))
+
+
+def _rate_problems(
+    checks: Mapping[str, FieldCheck], threshold: float, volatile_match: float, what: str
+) -> list[str]:
+    """Fields that reproduce too few known values: stable ones need `threshold` of
+    them, volatile ones `volatile_match`."""
+    problems = []
+    for name, check in checks.items():
+        needed = volatile_match if check.volatile else threshold
+        if check.compared and check.rate < needed:
+            example = check.mismatches[0]
+            kind = " for a volatile field" if check.volatile else ""
+            problems.append(
+                f"{name} reproduces {check.matched}/{check.compared} {what} "
+                f"(needs {needed:.0%}{kind}); expected {example.expected!r}, got {example.got!r}"
+            )
+    return problems
+
+
+def _run_records(
+    spec: SourceSpec, pages: Pages, extractor: Extractor, known: KnownRecords
+) -> list[tuple[str, RecordResult]]:
+    """The records on the pages the failed run stored whose key the last good run had
+    too, each once: from its detail pages, or without them the items of its listing
+    pages. Every stored page is parsed, so none are when no records are known."""
+    if not known:
+        return []
+    found: dict[str, RecordResult] = {}
+    if spec.item.follow is not None:
+        for doc in pages.detail_pages():
+            result = extractor.extract(doc)
+            key = key_of(result, spec.item.key)
+            if key is not None and key in known:
+                found.setdefault(key, result)
+    else:
+        for page in pages.listing_pages():
+            for key, item in _items(spec, page):
+                if key is not None and key in known and key not in found:
+                    found[key] = extractor.extract(item)
+    return list(found.items())
 
 
 def _items(spec: SourceSpec, page: Document) -> list[tuple[str | None, Document]]:
@@ -377,14 +464,19 @@ def _sample_problems(
 
 
 def _value_problems(
-    spec: SourceSpec, baseline: RunSummary | None, records: list[RecordResult], unit: str
+    spec: SourceSpec,
+    baseline: RunSummary | None,
+    records: list[RecordResult],
+    unit: str,
+    names: Iterable[str] | None = None,
 ) -> list[str]:
     """Fields that took only a few values in the last good run (a status, a category)
-    must mostly read values from that set; a new one now and then is fine."""
+    must mostly read values from that set; a new one now and then is fine. Checks
+    the fields in `names`, or all of them."""
     problems: list[str] = []
     if baseline is None:
         return problems
-    for name in spec.fields:
+    for name in spec.fields if names is None else names:
         stats = baseline.fields.get(name)
         known = stats.known_values if stats is not None else None
         if known is None:
