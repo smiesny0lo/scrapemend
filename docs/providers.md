@@ -50,7 +50,7 @@ The provider sends Claude a **repair context**:
 
 **Pruning** removes scripts, styles and comments, keeps only selector-relevant attributes, shortens long texts, and cuts repeated listing items down to three.
 
-Claude answers with **structured output**: JSON constrained to a schema, which the SDK validates and scrapemend turns into a `SpecPatch` and validates again. If the gate rejects an attempt, its problems are sent back for a second try (`--attempts`, default 2). The unchanged context is served from the prompt cache.
+Claude answers with **structured output**: JSON constrained to the schema sent in `output_config.format`, which scrapemend validates, turns into a `SpecPatch` and validates again. If the gate rejects an attempt, its problems are sent back for a second try (`--attempts`, default 2). The unchanged context is served from the prompt cache.
 
 Settings:
 

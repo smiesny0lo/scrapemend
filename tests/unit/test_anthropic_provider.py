@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 import pytest
@@ -48,8 +49,12 @@ def test_request_shape() -> None:
     [request] = client.requests
     assert request["model"] == DEFAULT_MODEL == "claude-opus-5-5"
     assert request["system"] == SYSTEM
-    assert request["output_format"] is RepairOutput
-    assert request["output_config"] == {"effort": "high"}
+    # The schema goes in output_config.format; the output_format parameter is deprecated.
+    assert "output_format" not in request
+    assert request["output_config"] == {
+        "effort": "high",
+        "format": {"type": "json_schema", "schema": RepairOutput.model_json_schema()},
+    }
     assert (request["betas"], request["fallbacks"]) == ([FALLBACK_BETA], "default")
     [block] = request["messages"][0]["content"]
     assert block["cache_control"] == {"type": "ephemeral"}
@@ -117,14 +122,11 @@ def test_an_answer_outside_the_schema_is_refused() -> None:
     with pytest.raises(ValidationError, match="start"):
         RepairOutput.model_validate(smuggled)
 
-    client = RecordedClaude()
-
-    def parse(**request: Any) -> Any:  # the SDK validates the answer the same way
-        return RepairOutput.model_validate(smuggled)
-
-    client.beta.messages.parse = parse
-    with pytest.raises(ProviderError, match="did not match the schema"):
-        AnthropicProvider(client=client).propose(CONTEXT)
+    for text in (json.dumps(smuggled), '{"rationale": "cut off'):
+        client = RecordedClaude()
+        client.answers.append(text)
+        with pytest.raises(ProviderError, match="did not match the schema"):
+            AnthropicProvider(client=client).propose(CONTEXT)
 
 
 # --- the answer ------------------------------------------------------------------------
@@ -185,8 +187,10 @@ def test_wire_schema_is_closed_everywhere() -> None:
                 found += objects(value)
         return found
 
-    schema = RepairOutput.model_json_schema()
-    assert all(o.get("additionalProperties") is False for o in objects(schema))
+    p, client = provider("anthropic-demo-v2")
+    p.propose(CONTEXT)
+    schema = client.requests[0]["output_config"]["format"]["schema"]
+    assert objects(schema) and all(o.get("additionalProperties") is False for o in objects(schema))
 
 
 # --- when it goes wrong -------------------------------------------------------------------
@@ -233,7 +237,7 @@ def test_api_errors_become_provider_errors() -> None:
             request=httpx2.Request("POST", "https://api.anthropic.com")
         )
 
-    client.beta.messages.parse = fail
+    client.beta.messages.create = fail
     with pytest.raises(ProviderError, match="Anthropic API error"):
         AnthropicProvider(client=client).propose(CONTEXT)
 

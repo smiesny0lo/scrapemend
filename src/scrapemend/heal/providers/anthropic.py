@@ -1,9 +1,10 @@
 """Repairs proposed by Claude through the Anthropic API (install the `anthropic` extra).
 
-The model sees the repair context and answers with structured output: a JSON
-object matching RepairOutput, which the SDK validates. It is turned into a
-SpecPatch, validated again, and then judged by the verification gate like any
-other repair. Nothing the model returns is executed.
+The model sees the repair context and answers with structured output: the request's
+output_config.format holds RepairOutput's JSON schema, and the JSON text that comes
+back is validated against RepairOutput. It is turned into a SpecPatch, validated
+again, and then judged by the verification gate like any other repair. Nothing the
+model returns is executed.
 """
 
 import os
@@ -216,16 +217,17 @@ class AnthropicProvider:
         self.effort = effort
         self.max_tokens = max_tokens
         self.fallbacks = fallbacks
-        if client is None:
-            try:
-                import anthropic
-            except ImportError:
-                raise ProviderError(
-                    "the anthropic provider needs the anthropic package: "
-                    "pip install 'scrapemend[anthropic]'"
-                ) from None
-            client = anthropic.Anthropic()
-        self.client = client
+        try:
+            import anthropic
+        except ImportError:
+            raise ProviderError(
+                "the anthropic provider needs the anthropic package: "
+                "pip install 'scrapemend[anthropic]'"
+            ) from None
+        # The SDK adapts the schema to what structured outputs support.
+        schema = anthropic.transform_schema(RepairOutput)
+        self.output_format: dict[str, Any] = {"type": "json_schema", "schema": schema}
+        self.client = client if client is not None else anthropic.Anthropic()
 
     def request(self, context: RepairContext) -> dict[str, Any]:
         """The API request for a context (separate from sending it, for inspection)."""
@@ -240,8 +242,7 @@ class AnthropicProvider:
             "max_tokens": self.max_tokens,
             "system": SYSTEM,
             "messages": [{"role": "user", "content": content}],
-            "output_format": RepairOutput,
-            "output_config": {"effort": self.effort},
+            "output_config": {"effort": self.effort, "format": self.output_format},
         }
         if self.fallbacks:
             request |= {"betas": [FALLBACK_BETA], "fallbacks": "default"}
@@ -249,9 +250,7 @@ class AnthropicProvider:
 
     def propose(self, context: RepairContext) -> SpecPatch | None:
         try:
-            response = self.client.beta.messages.parse(**self.request(context))
-        except ValidationError as e:
-            raise ProviderError(f"the model's answer did not match the schema: {e}") from None
+            response = self.client.beta.messages.create(**self.request(context))
         except Exception as e:  # the SDK's APIError family, without importing it here
             if type(e).__module__.startswith("anthropic"):
                 raise ProviderError(f"Anthropic API error: {e}") from None
@@ -262,9 +261,14 @@ class AnthropicProvider:
             raise ProviderError(f"the model declined to answer (category: {category})")
         if response.stop_reason == "max_tokens":
             raise ProviderError(f"the answer was cut off at max_tokens={self.max_tokens}")
-        output = response.parsed_output
-        if output is None:
+        # The answer is the first text block (thinking blocks may come before it).
+        text = next((block.text for block in response.content if block.type == "text"), None)
+        if text is None:
             raise ProviderError("the response contained no structured answer")
+        try:
+            output = RepairOutput.model_validate_json(text)
+        except ValidationError as e:
+            raise ProviderError(f"the model's answer did not match the schema: {e}") from None
         try:
             patch = output.to_patch()
         except (ValidationError, ValueError) as e:

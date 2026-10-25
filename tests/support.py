@@ -18,24 +18,33 @@ RECORDED = Path(__file__).parent / "fixtures" / "recorded"
 
 
 class RecordedClaude:
-    """Stands in for anthropic.Anthropic: answers `beta.messages.parse` with recorded
-    structured outputs, in order, and keeps every request it got."""
+    """Stands in for anthropic.Anthropic: answers `beta.messages.create` with structured
+    outputs, in order, as the API returns them (JSON text after a thinking block), and
+    keeps every request it got. An answer is a recording's name, or a RepairOutput."""
 
     def __init__(self, *answers: RepairOutput | str, stop_reason: str = "end_turn") -> None:
-        self.answers = [recorded(a) if isinstance(a, str) else a for a in answers]
+        # The JSON texts to answer with.
+        self.answers = [
+            (RECORDED / f"{a}.json").read_text("utf-8")
+            if isinstance(a, str)
+            else a.model_dump_json()
+            for a in answers
+        ]
         self.stop_reason = stop_reason
         self.requests: list[dict[str, Any]] = []
-        self.beta = SimpleNamespace(messages=SimpleNamespace(parse=self._parse))
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
 
-    def _parse(self, **request: Any) -> SimpleNamespace:
+    def _create(self, **request: Any) -> SimpleNamespace:
         self.requests.append(request)
-        answer = self.answers.pop(0) if self.answers else None
+        content = [SimpleNamespace(type="thinking", thinking="", signature="sig")]
+        if self.answers:
+            content.append(SimpleNamespace(type="text", text=self.answers.pop(0)))
         return SimpleNamespace(
             stop_reason=self.stop_reason,
             stop_details=SimpleNamespace(category="cyber")
             if self.stop_reason == "refusal"
             else None,
-            parsed_output=answer,
+            content=content,
         )
 
 
