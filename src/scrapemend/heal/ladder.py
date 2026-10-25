@@ -176,7 +176,26 @@ def heal(
 
     blocker = _auto_blocker(mode, failed, accepted)
     if blocker is None:
-        version = promote(state, accepted, pages)
+        # Verified again exactly as `scrapemend promote` does: on a new PageSource,
+        # which sees every page stored with the failed run by now, and never forced.
+        fresh = PageSource(
+            snapshots, spec.id, failed.run_id, fetcher=fetcher, spec_version=spec.version
+        )
+        try:
+            version = promote(state, accepted, fresh)
+        except PromotionRefused as e:
+            reason = (
+                f"proposal {accepted.id} passed verification, but not again to be promoted: {e}"
+            )
+            state.specs.quarantine(spec.id, reason)
+            alert("quarantined", reason)
+            return HealOutcome(
+                source_id=spec.id,
+                status="quarantined",
+                message=reason,
+                run_id=failed.run_id,
+                proposals=[state.proposals.get(p.id) or p for p in proposals],
+            )
         message = f"proposal {accepted.id} passed verification and is now v{version.version}"
         alert("repair_promoted", message)
         return HealOutcome(

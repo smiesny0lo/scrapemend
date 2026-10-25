@@ -23,6 +23,8 @@ from examples.mutating_site.records import generate_notices
 from scrapemend.cli import app as cli
 from scrapemend.events import Event
 from scrapemend.fetch import HttpFetcher, Response, TransientError
+from scrapemend.heal import ladder
+from scrapemend.heal import verify as verification
 from scrapemend.heal.context import RepairContext
 from scrapemend.heal.ladder import PromotionRefused, heal, promote, rollback, run_and_heal
 from scrapemend.heal.pages import PageSource
@@ -235,6 +237,90 @@ def test_live_claude_heals_the_redesign(world: World, layout: int) -> None:
     healed = world.run(on_record=lambda r: titles.__setitem__(str(r.url), str(r.record["title"])))
     assert (healed.status, healed.summary.valid_records) == ("ok", 200)
     assert titles == expected_records(world.site.base_url)
+
+
+def test_auto_mode_verifies_again_exactly_like_promote(
+    world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Auto mode used to verify a repair again on the PageSource `heal` built, whose
+    # list of detail pages was fixed when it was made, so it saw 3 known records where
+    # `scrapemend promote` saw 20. The same proposal, promoted both ways, must get the
+    # same report.
+    world.layout(2)
+    world.run()
+    twin_dir = tmp_path / "twin"  # the same state, for the promotion by hand
+    twin_dir.mkdir()
+    shutil.copy(world.db, twin_dir / "state.db")
+    shutil.copytree(world.snapshot_dir, twin_dir / "snapshots")
+    patch = load_patch(REPAIRS / "demo-v2.yaml")
+
+    built: list[PageSource] = []
+
+    class Built(PageSource):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            built.append(self)
+
+    monkeypatch.setattr(ladder, "PageSource", Built)
+    auto = world.heal(PatchProvider(patch), mode="auto")
+    monkeypatch.undo()
+    assert auto.status == "promoted"
+    # Pages to verify the repair on, then fresh ones to promote it, like `promote`'s:
+    # by then every page it needs is stored.
+    assert len(built) == 2 and built[1].fetched == 0
+
+    twin = State(twin_dir / "state.db")
+    try:
+        snapshots = FilesystemSnapshotStore(twin_dir / "snapshots")
+        active = twin.specs.active("tenders-demo")
+        assert active is not None
+        spec = world.rebase(active.spec)
+        manual = heal(spec, twin, snapshots, fetcher(world.site, spec), PatchProvider(patch))
+        assert manual.status == "proposed" and manual.run_id is not None
+        pages = PageSource(
+            snapshots, "tenders-demo", manual.run_id, fetcher=fetcher(world.site, spec)
+        )
+        promote(twin, manual.proposals[0], pages)
+        by_auto = world.state.proposals.get(auto.proposals[0].id)
+        by_hand = twin.proposals.get(manual.proposals[0].id)
+        assert by_auto is not None and by_hand is not None
+        assert (by_auto.status, by_hand.status) == ("promoted", "promoted")
+        assert by_auto.report == by_hand.report
+        assert by_auto.report.shadow is not None and by_auto.report.shadow.compared == 200
+    finally:
+        twin.close()
+
+
+def test_auto_mode_refuses_what_promote_refuses(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # If verifying again for the promotion doesn't pass, nothing is promoted: as if a
+    # page stopped loading in between.
+    real = verification.verify
+    reports: list[VerificationReport] = []
+
+    def verify(*args: Any, **kwargs: Any) -> VerificationReport:
+        report = real(*args, **kwargs)
+        reports.append(report)
+        if len(reports) == 1:
+            return report
+        gone = Check(name="shadow run", status="not run", reason="a page did not load")
+        return report.model_copy(update={"checks": [*report.checks[:-1], gone]})
+
+    monkeypatch.setattr(ladder, "verify", verify)
+    world.layout(2)
+    world.run()
+    outcome = world.heal(PatchProvider(load_patch(REPAIRS / "demo-v2.yaml")), mode="auto")
+    assert outcome.status == "quarantined"
+    assert outcome.message == (
+        "proposal 1 passed verification, but not again to be promoted: proposal 1 could not "
+        "be verified again: shadow run: a page did not load; pass --force to promote it "
+        "anyway (never past a check that failed)"
+    )
+    stored = world.state.proposals.get(1)
+    assert stored is not None and stored.status == "unverified"
+    active = world.state.specs.active("tenders-demo")
+    assert active is not None and active.version == 1
 
 
 @pytest.mark.parametrize("layout", [2, 3])
