@@ -9,6 +9,7 @@ What a crawl found is judged afterwards, by `scrapemend.runner`.
 
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
@@ -54,6 +55,10 @@ class FieldStats(BaseModel):
     # DOMAIN_LIMIT; then None. Repairs are checked against the values of a status or
     # a category, so they can't read a neighbouring element instead.
     domain: list[Encoded] | None = Field(default_factory=list)
+    counts: list[int] = Field(default_factory=list)  # how often each value of `domain` was found
+    # Numbers: digits before the decimal point (0 below 1) -> values with that many.
+    # A run whose numbers shift in magnitude against the last good run's is drift.
+    digits: dict[int, int] = Field(default_factory=dict)
 
     @property
     def fallback_wins(self) -> int:
@@ -73,11 +78,18 @@ class FieldStats(BaseModel):
         else:
             self.filled += 1
             value = encode(field.value)
-            if self.domain is not None and value not in self.domain:
-                if len(self.domain) < DOMAIN_LIMIT:
+            if self.domain is not None:
+                if value in self.domain:
+                    self.counts[self.domain.index(value)] += 1
+                elif len(self.domain) < DOMAIN_LIMIT:
                     self.domain.append(value)
+                    self.counts.append(1)
                 else:
-                    self.domain = None
+                    self.domain, self.counts = None, []
+            if isinstance(field.value, int | Decimal):
+                size = abs(Decimal(field.value))
+                digits = len(str(int(size))) if size >= 1 else 0
+                self.digits[digits] = self.digits.get(digits, 0) + 1
         if field.error is not None:
             self.unusable += 1
         if any(v.kind in DISQUALIFYING for v in violations):

@@ -478,6 +478,31 @@ def test_a_page_that_did_not_load_is_tried_again_by_promote(world: World) -> Non
     assert promoted.report.shadow.compared == 200
 
 
+@pytest.mark.parametrize(
+    ("fixture", "drift"),
+    [
+        ("v2-value-fitted-to-one-page.yaml", "value: 53% of its values have another number"),
+        ("v2-value-drops-millions.yaml", "value: 15% of its values have another number"),
+        ("v2-status-enumerates-examples.yaml", "status empty in 20% of records (was 0%)"),
+    ],
+)
+def test_a_wrong_repair_promoted_anyway_shows_as_drift(
+    world: World, fixture: str, drift: str
+) -> None:
+    # Promoted past the gate, as an older gate let these through: the run after it
+    # said ok, with 29 to 102 of 200 values wrong or empty.
+    world.layout(2)
+    active = world.state.specs.active("tenders-demo")
+    assert active is not None
+    wrong = load_patch(BAD / fixture).apply(active.spec, version=2)
+    world.state.specs.add(wrong, "repair", "promoted by an older gate")
+    world.state.specs.activate("tenders-demo", 2)
+    report = world.run()
+    assert report.status == "drift"
+    assert any(f.message.startswith(drift) for f in report.failures), report.failures
+    assert world.events.kinds[0] == "drift"
+
+
 # --- regexes ---------------------------------------------------------------------------------
 
 

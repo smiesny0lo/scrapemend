@@ -1,8 +1,10 @@
+from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from scrapemend.detect.classify import Diagnosis, Evidence, Failure, classify, diagnose, worst
+from scrapemend.extract import FieldResult
 from scrapemend.fetch import BlockedError, RobotsDisallowed, TransientError
 from scrapemend.pipeline import FieldStats, ItemFailure, RunAborted, RunSummary
 from scrapemend.spec import SourceSpec
@@ -232,6 +234,110 @@ def test_drift() -> None:
     found = classify(evidence(summary=s, baseline=summary(records=400)))[0]
     assert [f.category for f in found] == ["drift", "drift"]
     assert "150 records, last good run had 400" in found[0].message
+
+
+def drift(**fields: FieldStats) -> list[str]:
+    """The drift messages of a complete 200-record run against a last good run of 200,
+    with these field stats now, and the defaults then."""
+    now = summary()
+    now.fields.update(fields)
+    found = classify(evidence(summary=now, baseline=summary()))[0]
+    assert {f.category for f in found} <= {"drift"}
+    return [f.message for f in found]
+
+
+@pytest.mark.parametrize(("empty", "drifted"), [(10, False), (11, True), (39, True)])
+def test_a_field_more_than_5_points_emptier_is_drift(empty: int, drifted: bool) -> None:
+    # Review attack S2: status went from 0% to 19.5% empty, which used to be ok.
+    status = FieldStats(filled=200 - empty, empty=empty, winners={0: 200 - empty})
+    expected = [f"category empty in {empty / 200:.0%} of records (was 0%)"] if drifted else []
+    assert drift(category=status) == expected
+
+
+def statuses(**counts: int) -> FieldStats:
+    """A field with a small set of values, as a run counts them."""
+    filled = sum(counts.values())
+    return FieldStats(
+        filled=filled, winners={0: filled}, domain=list(counts), counts=list(counts.values())
+    )
+
+
+def test_a_common_category_disappearing_is_drift() -> None:
+    before = statuses(Open=100, Closed=61, Awarded=39)
+    after = statuses(Open=139, Closed=61)  # every Awarded now reads Open
+    found = classify(evidence(summary=summary(category=after), baseline=summary(category=before)))[
+        0
+    ]
+    assert [f.message for f in found] == [
+        "category no longer reads 'Awarded', which 39 of the last good run's 200 records had"
+    ]
+    assert found[0].fields == ["category"]
+
+
+def test_a_rare_category_disappearing_is_not_drift() -> None:
+    before = statuses(Open=100, Closed=91, Withdrawn=9)  # 4.5% of records
+    after = statuses(Open=109, Closed=91)
+    assert classify(
+        evidence(summary=summary(category=after), baseline=summary(category=before))
+    ) == (
+        [],
+        [],
+    )
+
+
+def test_a_field_with_few_values_reading_many_is_drift() -> None:
+    before = statuses(Open=100, Closed=61, Awarded=39)
+    after = FieldStats(filled=200, winners={0: 200}, domain=None)  # more than 20 values
+    found = classify(evidence(summary=summary(category=after), baseline=summary(category=before)))[
+        0
+    ]
+    assert [f.message for f in found] == [
+        "category reads more than 20 different values; the last good run had 3"
+    ]
+
+
+def amounts(**digits: int) -> FieldStats:
+    """A number field: how many values have how many digits before the point."""
+    filled = sum(digits.values())
+    by_digits = {int(name.removeprefix("d")): n for name, n in digits.items()}
+    return FieldStats(filled=filled, empty=200 - filled, winners={0: filled}, digits=by_digits)
+
+
+def test_numbers_shifting_in_magnitude_is_drift() -> None:
+    # Review attack S1: every value over 1M lost its millions, 29 of 184 values.
+    before = amounts(d5=94, d6=61, d7=29)
+    after = amounts(d5=94, d6=90)
+    found = classify(evidence(summary=summary(value=after), baseline=summary(value=before)))[0]
+    assert [f.message for f in found] == [
+        "value: 16% of its values have another number of digits than in the last good run "
+        "(7 digits: 0%, was 16%)"
+    ]
+
+
+def test_numbers_shifting_a_little_are_not_drift() -> None:
+    before = amounts(d5=94, d6=61, d7=29)
+    after = amounts(d5=94, d6=71, d7=19)  # 10 of 184 values: 5%
+    assert classify(evidence(summary=summary(value=after), baseline=summary(value=before))) == (
+        [],
+        [],
+    )
+
+
+def test_rates_need_enough_records_to_drift() -> None:
+    # One record of ten is ten points; with this few records, that is chance.
+    s = summary(records=10, category=FieldStats(filled=8, empty=2, winners={0: 8}))
+    assert classify(evidence(summary=s, baseline=summary(records=10))) == ([], [])
+
+
+def test_field_stats_count_values_and_digits() -> None:
+    stats = FieldStats()
+    for value in ["Open", "Closed", "Open", None]:
+        stats.add(FieldResult(value, value, 0 if value else None), [])
+    assert (stats.domain, stats.counts, stats.empty) == (["Open", "Closed"], [2, 1], 1)
+    numbers = FieldStats()
+    for amount in ["0.50", "21400.00", "1234567.00", "99999", "-120"]:
+        numbers.add(FieldResult(Decimal(amount), amount, 0), [])
+    assert numbers.digits == {0: 1, 5: 2, 7: 1, 3: 1}
 
 
 def test_drift_needs_a_complete_run() -> None:

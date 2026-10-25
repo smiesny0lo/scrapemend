@@ -22,7 +22,13 @@ from pydantic import BaseModel, Field
 
 from scrapemend.detect.fingerprint import CHANGED_BELOW
 from scrapemend.fetch import BlockedError, FetchError, RobotsDisallowed, TransientError
-from scrapemend.pipeline import MAX_CONSECUTIVE_FAILURES, RunAborted, RunSummary
+from scrapemend.pipeline import (
+    DOMAIN_LIMIT,
+    MAX_CONSECUTIVE_FAILURES,
+    FieldStats,
+    RunAborted,
+    RunSummary,
+)
 from scrapemend.spec import SourceSpec
 from scrapemend.validate import Violation
 from scrapemend.validate.batch import MIN_RATE_RECORDS
@@ -40,8 +46,10 @@ SEVERITY: tuple[Category, ...] = (
 
 FALLBACK_SHARE = 0.5  # a fallback winning this share of records means the primary broke
 NULL_JUMP = 0.5  # a field this much emptier than in the last good run is failing
-DRIFT_NULL_SHIFT = 0.25
+DRIFT_NULL_SHIFT = 0.05  # empty rates further apart than this are drift
 DRIFT_COUNT_SHIFT = 0.5
+DRIFT_CATEGORY_SHARE = 0.05  # of records a value must have had for its disappearing to count
+DRIFT_MAGNITUDE_SHIFT = 0.1  # share of a number field's values that may change magnitude
 FAILING_PAGES_SHARE = 0.1
 SMALL_SAMPLE = 3  # records needed before "empty in every sampled record" means anything
 
@@ -287,6 +295,11 @@ def _fallback_fields(summary: RunSummary, baseline: RunSummary | None) -> dict[s
 
 
 def _drift(spec: SourceSpec, summary: RunSummary, baseline: RunSummary) -> list[Failure]:
+    """Values that parse, but are distributed unlike the last good run's: far fewer or
+    more records; and, with MIN_RATE_RECORDS records in both runs, a field's empty
+    rate moving by more than DRIFT_NULL_SHIFT, a common value of a small set (a
+    status, a category) gone, or a number field's values changing magnitude. After a
+    repair is promoted, that is how a field wrong on some records shows."""
     drift = []
     if baseline.records:
         shift = abs(summary.records - baseline.records) / baseline.records
@@ -297,19 +310,65 @@ def _drift(spec: SourceSpec, summary: RunSummary, baseline: RunSummary) -> list[
                     message=f"{summary.records} records, last good run had {baseline.records}",
                 )
             )
+    if min(summary.records, baseline.records) < MIN_RATE_RECORDS:
+        return drift  # a rate of so few records is mostly chance
     for name in spec.fields:
-        if name not in baseline.fields:
+        if name not in baseline.fields or name not in summary.fields:
             continue
-        now, before = summary.null_rate(name), baseline.null_rate(name)
-        if abs(now - before) > DRIFT_NULL_SHIFT:
-            drift.append(
-                Failure(
-                    category="drift",
-                    message=f"{name} empty in {now:.0%} of records (was {before:.0%})",
-                    fields=[name],
-                )
-            )
+        before, now = baseline.fields[name], summary.fields[name]
+        messages = []
+        empty_now, empty_before = summary.null_rate(name), baseline.null_rate(name)
+        if abs(empty_now - empty_before) > DRIFT_NULL_SHIFT:
+            messages.append(f"{name} empty in {empty_now:.0%} of records (was {empty_before:.0%})")
+        messages += _values_gone(name, before, now, baseline.records)
+        messages += _magnitudes(name, before.digits, now.digits)
+        drift += [Failure(category="drift", message=m, fields=[name]) for m in messages]
     return drift
+
+
+def _values_gone(name: str, before: FieldStats, now: FieldStats, records: int) -> list[str]:
+    """A field with a small set of values: a value common in the last good run gone."""
+    known = before.known_values
+    if known is None or len(before.counts) != len(before.domain or []):
+        return []  # not a small set, or a run from before values were counted
+    if now.domain is None:
+        return [
+            f"{name} reads more than {DOMAIN_LIMIT} different values; "
+            f"the last good run had {len(known)}"
+        ]
+    return [
+        f"{name} no longer reads {value!r}, which {count} of the last good run's "
+        f"{records} records had"
+        for value, count in zip(before.domain or [], before.counts, strict=True)
+        if count >= DRIFT_CATEGORY_SHARE * records and value not in now.domain
+    ]
+
+
+def _magnitudes(name: str, before: Mapping[int, int], now: Mapping[int, int]) -> list[str]:
+    """A number field: the share of values whose number of digits changed, measured as
+    the distance between the two runs' distributions of digits."""
+    total_before, total_now = sum(before.values()), sum(now.values())
+    if min(total_before, total_now) < MIN_RATE_RECORDS:
+        return []
+    shares = {
+        digits: (before.get(digits, 0) / total_before, now.get(digits, 0) / total_now)
+        for digits in sorted(set(before) | set(now))
+    }
+    shift = sum(abs(was - is_) for was, is_ in shares.values()) / 2
+    if shift <= DRIFT_MAGNITUDE_SHIFT:
+        return []
+
+    def change(digits: int) -> tuple[float, float]:
+        # The size that changed most; on a tie, the one that lost values (the millions gone).
+        was, is_ = shares[digits]
+        return round(abs(was - is_), 9), was - is_
+
+    digits = max(shares, key=change)
+    was, is_ = shares[digits]
+    return [
+        f"{name}: {shift:.0%} of its values have another number of digits than in the last "
+        f"good run ({digits} digits: {is_:.0%}, was {was:.0%})"
+    ]
 
 
 def _structure_note(changed: Mapping[str, float]) -> str:
