@@ -9,7 +9,12 @@ from pydantic import AwareDatetime, BaseModel
 from scrapemend.heal.verify import VerificationReport
 from scrapemend.spec.patch import SpecPatch
 
-ProposalStatus = Literal["accepted", "rejected", "promoted"]
+ProposalStatus = Literal["accepted", "unverified", "rejected", "promoted"]
+STATUS: dict[str, ProposalStatus] = {
+    "passed": "accepted",
+    "not run": "unverified",  # promote --force may promote it
+    "failed": "rejected",
+}
 
 
 class Proposal(BaseModel):
@@ -38,7 +43,7 @@ class ProposalStore:
         patch: SpecPatch,
         report: VerificationReport,
     ) -> Proposal:
-        status: ProposalStatus = "accepted" if report.accepted else "rejected"
+        status = STATUS[report.verdict]
         with self.db:
             cursor = self.db.execute(
                 "INSERT INTO proposals (source_id, base_version, run_id, provider, patch, report,"
@@ -71,7 +76,7 @@ class ProposalStore:
 
     def reverified(self, proposal_id: int, report: VerificationReport) -> None:
         """Store the verdict of verifying a proposal again (before promoting it)."""
-        status: ProposalStatus = "accepted" if report.accepted else "rejected"
+        status = STATUS[report.verdict]
         with self.db:
             self.db.execute(
                 "UPDATE proposals SET report = ?, status = ? WHERE id = ?",

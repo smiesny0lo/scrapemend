@@ -282,7 +282,7 @@ def test_correct_repair_reproduces_every_stored_record(broken: Broken, crawled: 
     assert report.shadow is not None
     assert (report.shadow.compared, report.anchors_checked, report.sample) == (200, 10, 10)
     assert {f.matched for f in report.shadow.fields.values()} == {200}
-    assert report.notes == []
+    assert report.not_run == []  # no check was left out
 
 
 def test_without_stored_detail_pages_the_shadow_run_fetches_them(broken: Broken) -> None:
@@ -294,7 +294,7 @@ def test_without_stored_detail_pages_the_shadow_run_fetches_them(broken: Broken)
     assert report.accepted, report.problems
     assert report.shadow is not None
     assert (report.shadow.records, report.shadow.compared) == (200, 200)
-    assert report.notes == []
+    assert report.not_run == []  # no check was left out
 
 
 # Review attacks: each is the correct repair with one defect that is right on most

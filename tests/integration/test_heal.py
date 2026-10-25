@@ -22,14 +22,14 @@ from examples.mutating_site.chaos import Chaos, parse_modes
 from examples.mutating_site.records import generate_notices
 from scrapemend.cli import app as cli
 from scrapemend.events import Event
-from scrapemend.fetch import HttpFetcher
+from scrapemend.fetch import HttpFetcher, Response, TransientError
 from scrapemend.heal.context import RepairContext
 from scrapemend.heal.ladder import PromotionRefused, heal, promote, rollback, run_and_heal
 from scrapemend.heal.pages import PageSource
 from scrapemend.heal.proposals import Proposal
 from scrapemend.heal.providers import NoneProvider, PatchProvider
 from scrapemend.heal.providers.anthropic import AnthropicProvider
-from scrapemend.heal.verify import VerificationReport
+from scrapemend.heal.verify import Check, VerificationReport
 from scrapemend.runner import run_source
 from scrapemend.runs import RunReport
 from scrapemend.snapshots import FilesystemSnapshotStore
@@ -291,6 +291,105 @@ def test_a_repair_fitted_to_the_examples_is_not_promoted_automatically(world: Wo
     assert active is not None and active.version == 1
 
 
+# --- fail closed: a repair that can't be verified is not promoted ---------------------------
+
+
+def forget_the_good_records(world: World) -> None:
+    """Like a database from before the last good run's records were kept."""
+    with world.state.db:
+        world.state.db.execute("DELETE FROM good_records")
+
+
+def test_a_repair_that_cannot_be_verified_is_never_promoted_automatically(world: World) -> None:
+    world.layout(2)
+    world.run()
+    forget_the_good_records(world)
+    outcome = world.heal(PatchProvider(load_patch(REPAIRS / "demo-v2.yaml")), mode="auto")
+    assert outcome.status == "quarantined"  # auto mode never forces
+    [proposal] = outcome.proposals
+    assert (proposal.status, proposal.report.verdict, proposal.report.problems) == (
+        "unverified",
+        "not run",
+        [],
+    )
+    assert outcome.message == (
+        "proposal 1 could not be verified: shadow run: the last good run's records are not "
+        "stored; review it, then promote it with --force, or run heal again"
+    )
+    assert world.events.kinds[-1] == "quarantined"
+    active = world.state.specs.active("tenders-demo")
+    assert active is not None and active.version == 1
+
+
+def test_only_force_promotes_a_repair_whose_checks_did_not_run(world: World) -> None:
+    world.layout(2)
+    world.run()
+    forget_the_good_records(world)
+    [proposal] = world.heal(PatchProvider(load_patch(REPAIRS / "demo-v2.yaml"))).proposals
+    with pytest.raises(PromotionRefused, match="could not be verified again") as refused:
+        world.promote(proposal)
+    assert refused.value.report is not None and refused.value.report.verdict == "not run"
+    version = world.promote(proposal, force=True)
+    assert version.version == 2
+    assert "forced past checks that did not run: shadow run" in version.note
+    assert world.run().status == "ok"
+
+
+def test_force_never_promotes_a_repair_that_failed_a_check(world: World) -> None:
+    world.layout(2)
+    world.run()
+    forget_the_good_records(world)  # the shadow run can't run, and the anchors fail
+    [proposal] = world.heal(PatchProvider(load_patch(BAD / "v2-wrong-field.yaml"))).proposals
+    assert (proposal.status, proposal.report.verdict) == ("rejected", "failed")
+    with pytest.raises(PromotionRefused, match="rejected, not accepted"):
+        world.promote(proposal, force=True)
+
+
+class Unreachable:
+    """A fetcher for which one page keeps failing, as if after every retry."""
+
+    def __init__(self, fetcher: HttpFetcher, url: str) -> None:
+        self.fetcher = fetcher
+        self.url = url
+
+    def fetch(self, url: str) -> Response:
+        if url == self.url:
+            raise TransientError(url, "HTTP 503 after 4 attempts")
+        return self.fetcher.fetch(url)
+
+
+def test_a_page_that_did_not_load_is_tried_again_by_promote(world: World) -> None:
+    world.layout(2)
+    failed = world.run()
+    anchored = {a.url for a in world.state.anchors.all("tenders-demo")}
+    target = next(
+        url
+        for url in sorted(world.state.anchors.records("tenders-demo"), reverse=True)
+        if url not in anchored
+    )
+    spec = world.spec
+    outcome = heal(
+        spec,
+        world.state,
+        world.snapshots,
+        Unreachable(fetcher(world.site, spec), target),
+        PatchProvider(load_patch(REPAIRS / "demo-v2.yaml")),
+        run_id=failed.run_id,
+    )
+    assert outcome.status == "quarantined"
+    [proposal] = outcome.proposals
+    assert proposal.status == "unverified"
+    assert (
+        f"shadow run: {target} could not be loaded (HTTP 503 after 4 attempts)" in outcome.message
+    )
+    # The page loads again: promote fetches it, and the repair passes without --force.
+    world.promote(proposal)
+    promoted = world.state.proposals.get(proposal.id)
+    assert promoted is not None and promoted.status == "promoted"
+    assert promoted.report.accepted and promoted.report.shadow is not None
+    assert promoted.report.shadow.compared == 200
+
+
 # --- the ladder's other rungs ---------------------------------------------------------------
 
 
@@ -457,7 +556,17 @@ def test_cli_quarantine_heal_diff_promote_rollback(world: World, tmp_path: Path)
     healed = cli_run(world, "heal", "--patch", str(REPAIRS / "demo-v2.yaml"))
     assert healed.exit_code == 0, healed.output
     assert "heal: proposed: proposal 1 passed verification" in healed.output
-    assert "weakest field 100% of anchors, 10 other pages checked" in healed.output
+    # Every check, with what it covered.
+    for line in [
+        "passed   listing: 20 items on the first listing page, 3 listing pages along the "
+        "next-page link",
+        "passed   anchors: 10 of 10 anchor pages compared; weakest field 100%",
+        "passed   sample: 10 other pages",
+        "passed   known values: category, location, status on 20 pages",
+        "passed   shadow run: the whole source: 10 listing pages, 200 records; all 200 of the "
+        "last good run's records compared",
+    ]:
+        assert line in healed.output, healed.output
 
     listed = cli_run(world, "proposals")
     assert (
@@ -497,7 +606,7 @@ def test_cli_promote_verifies_the_proposal_again(world: World) -> None:
     world.layout(2)
     failed = world.run()
     old_report = VerificationReport(
-        accepted=True, threshold=0.9, anchors=10, anchors_checked=10, fields={}
+        checks=[Check(name="anchors", status="passed", reason="volatile fields were present")]
     )
     old = world.state.proposals.add(
         "tenders-demo",
@@ -516,6 +625,31 @@ def test_cli_promote_verifies_the_proposal_again(world: World) -> None:
     assert stored.report.problems and not stored.report.accepted
     active = world.state.specs.active("tenders-demo")
     assert active is not None and active.version == 1
+
+
+def test_cli_promote_force_past_checks_that_did_not_run(world: World) -> None:
+    world.layout(2)
+    world.run()
+    forget_the_good_records(world)
+    healed = cli_run(world, "heal", "--patch", str(REPAIRS / "demo-v2.yaml"))
+    assert healed.exit_code == 3, healed.output
+    assert "proposal 1 (patch:demo-v2.yaml, confidence 0.90): not run" in healed.output
+    assert "not run  shadow run: the last good run's records are not stored" in healed.output
+
+    listed = cli_run(world, "proposals")
+    assert "unverified" in listed.output
+
+    refused = cli_run(world, "promote", "1")
+    assert refused.exit_code == 3, refused.output
+    assert "proposal 1 could not be verified again: shadow run: " in refused.output
+    assert "pass --force to promote it anyway" in refused.output
+
+    forced = cli_run(world, "promote", "1", "--force")
+    assert forced.exit_code == 0, forced.output
+    assert (
+        "promoted with --force although these checks did not run: shadow run (the last good "
+        "run's records are not stored); v2 is now active"
+    ) in forced.output
 
 
 def test_cli_promote_refuses_a_proposal_for_another_version(world: World) -> None:

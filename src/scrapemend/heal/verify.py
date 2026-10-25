@@ -44,7 +44,11 @@ With heal.shadow_max_items, the shadow run reads a sample instead: listing pages
 drawn at random (with a fixed seed) from the last good run's, the same pages'
 item counts compared, and records drawn at random from their items.
 
-Accepted only if there is no problem at all.
+Every check ends passed, failed or not run, with the reason. A candidate is accepted
+only if every check passed. One that failed a check is rejected. One where a check
+couldn't run (a page that didn't load, no records of a good run to compare with) is
+unverified: fail closed. It is never promoted automatically, and only `promote
+--force` can promote it, never past a check that failed.
 """
 
 import hashlib
@@ -76,6 +80,8 @@ MIN_COVERAGE = 0.9  # of the last good run's records the shadow run must find ag
 MIN_SHADOW_RECORDS = 20  # records to compare (all of them, if the last good run had fewer)
 SHADOW_SEED = "scrapemend-shadow"  # draws the shadow run's sample, when it samples
 EXAMPLES = 3  # mismatches kept per field (and kind, in the shadow run)
+
+CheckStatus = Literal["passed", "failed", "not run"]
 
 
 class Mismatch(BaseModel):
@@ -135,21 +141,60 @@ class ShadowRun(BaseModel):
     fields: dict[str, ShadowField] = Field(default_factory=dict)
 
 
+class Check(BaseModel):
+    """One step of the gate. `reason` says what it covered, or why it didn't run."""
+
+    name: str
+    status: CheckStatus
+    reason: str
+    problems: list[str] = Field(default_factory=list)  # when it failed
+
+
 class VerificationReport(BaseModel):
-    accepted: bool
-    threshold: float  # share of anchor values a stable field must reproduce
+    checks: list[Check] = Field(default_factory=list)  # in the order they ran
+    threshold: float = 1.0  # share of anchor values a stable field must reproduce
     volatile_match: float = 0.6  # ... and a volatile one
     volatile_change: float = 0.1  # share of shadow-run records a volatile field may change on
-    anchors: int  # anchors available
-    anchors_checked: int  # anchor pages loaded and compared
-    fields: dict[str, FieldCheck]
+    anchors: int = 0  # anchors available
+    anchors_checked: int = 0  # anchor pages loaded and compared
+    fields: dict[str, FieldCheck] = Field(default_factory=dict)
     listing_items: int | None = None  # items found on the run's first listing page
     listing_links: int | None = None  # of those, items with a key (their detail link)
     listing_pages: int | None = None  # listing pages seen: the first, then along the next link
     sample: int = 0  # non-anchor pages checked
     shadow: ShadowRun | None = None  # None: it didn't start
-    problems: list[str] = Field(default_factory=list)
-    notes: list[str] = Field(default_factory=list)  # what limited the verdict, if anything
+
+    @property
+    def verdict(self) -> CheckStatus:
+        """Failed if any check failed; else not run if any check didn't run (or none
+        did): only every check passing passes. Fail closed."""
+        statuses = {check.status for check in self.checks}
+        if "failed" in statuses:
+            return "failed"
+        if "not run" in statuses or not statuses:
+            return "not run"
+        return "passed"
+
+    @property
+    def accepted(self) -> bool:
+        return self.verdict == "passed"
+
+    @property
+    def problems(self) -> list[str]:
+        """What is wrong with the candidate: the problems of the checks that failed."""
+        return [
+            problem
+            for check in self.checks
+            if check.status == "failed"
+            for problem in check.problems
+        ]
+
+    @property
+    def not_run(self) -> list[Check]:
+        return [check for check in self.checks if check.status == "not run"]
+
+    def check(self, name: str) -> Check:
+        return next(check for check in self.checks if check.name == name)
 
     @property
     def score(self) -> float:
@@ -172,9 +217,9 @@ def verify(
     volatile_match = spec.heal.volatile_match
     extractor = Extractor(spec.fields)
     strategies = {name: [build(s) for s in f.strategies] for name, f in spec.fields.items()}
-    problems: list[str] = []
 
     # 1. listing
+    problems: list[str] = []
     listing_items = listing_links = listing_pages = None
     first: Document | None = None
     items: list[tuple[str | None, Document]] = []
@@ -193,8 +238,13 @@ def verify(
         problems += walk_problems
         for page in seen:
             rows.add(page)
-    else:
-        problems.append("no listing page of the failed run to verify against")
+    listing = _check(
+        "listing",
+        problems,
+        None if listings else "no listing page of the failed run to verify against",
+        f"{listing_items} items on the first listing page, "
+        f"{listing_pages} listing pages along the next-page link",
+    )
 
     # 2. anchors
     checks = {name: FieldCheck(volatile=f.volatile) for name, f in spec.fields.items()}
@@ -211,19 +261,29 @@ def verify(
         checked.append(result)
         _compare(checks, anchor.values, result, anchor.url)
         shared.update(_shared_elements(strategies, anchor, result, doc))
-    if not anchors:
-        problems.append("no anchors to verify against: the source has had no good run yet")
-    elif len(checked) < min(MIN_ANCHORS, len(anchors)):
-        problems.append(
-            f"only {len(checked)} of {len(anchors)} anchor pages could be loaded"
-            if spec.item.follow
-            else f"only {len(checked)} of {len(anchors)} anchors were found on their listing pages"
-        )
-    problems += _rate_problems(checks, threshold, volatile_match, "anchor values")
+    problems = _rate_problems(checks, threshold, volatile_match, "anchor values")
     for (a, b), count in shared.items():
         problems.append(
             f"{a} and {b} read the same element on {count} of {len(checked)} anchor pages"
         )
+    unloaded = None
+    if not anchors:
+        unloaded = "no anchors to verify against: the source has had no good run yet"
+    elif len(checked) < min(MIN_ANCHORS, len(anchors)):
+        if spec.item.follow:  # the pages didn't load: nothing is known about them
+            unloaded = f"only {len(checked)} of {len(anchors)} anchor pages could be loaded"
+        else:  # the candidate's container or key can't find them
+            problems.append(
+                f"only {len(checked)} of {len(anchors)} anchors were found on their listing pages"
+            )
+    what = "anchor pages" if spec.item.follow else "anchors"
+    anchor_check = _check(
+        "anchors",
+        problems,
+        unloaded,
+        f"{len(checked)} of {len(anchors)} {what} compared; "
+        f"weakest field {min((c.rate for c in checks.values()), default=0.0):.0%}",
+    )
 
     # 3. sample: other items of the first listing page (their detail pages, if any)
     unit = "pages" if spec.item.follow else "items"
@@ -234,29 +294,40 @@ def verify(
         doc = pages.page(key) if spec.item.follow else item
         if doc is not None:
             sample.append(extractor.extract(doc))
-    problems += _sample_problems(spec, anchors, sample, unit)
+    sample_check = _check(
+        "sample",
+        _sample_problems(spec, anchors, sample, unit),
+        None,
+        f"{len(sample)} other {unit}",
+    )
 
     # 4. known values
     values = _KnownValues(spec, baseline)
     for result in checked + sample:
         values.add(result)
-    problems += values.problems(unit)
+    names = ", ".join(values.known) or "no field takes only a few values"
+    values_check = _check(
+        "known values",
+        values.problems(unit),
+        None,
+        f"{names} on {len(checked) + len(sample)} {unit}" if values.known else names,
+    )
 
-    # 5. the shadow run
-    notes: list[str] = []
+    # 5. the shadow run, unless a quicker check already failed
     shadow = None
-    if problems:
-        notes.append("the shadow run was skipped: a quicker check failed")
-    elif first is not None:
-        shadow, shadow_problems, unavailable = _shadow(
+    quick = [listing, anchor_check, sample_check, values_check]
+    if any(check.status == "failed" for check in quick):
+        shadow_check = _check("shadow run", [], "skipped: a quicker check failed", "")
+    elif first is None:
+        shadow_check = _check("shadow run", [], "skipped: no listing page to start from", "")
+    else:
+        shadow, problems, unavailable = _shadow(
             spec, pages, extractor, first, known or {}, baseline, threshold
         )
-        problems += shadow_problems
-        if unavailable is not None:
-            notes.append(f"the shadow run could not run: {unavailable}")
+        shadow_check = _check("shadow run", problems, unavailable, _covered(shadow))
 
     return VerificationReport(
-        accepted=not problems,
+        checks=[*quick, shadow_check],
         threshold=threshold,
         volatile_match=volatile_match,
         volatile_change=spec.heal.volatile_change,
@@ -268,9 +339,30 @@ def verify(
         listing_pages=listing_pages,
         sample=len(sample),
         shadow=shadow,
-        problems=problems,
-        notes=notes,
     )
+
+
+def _check(name: str, problems: list[str], not_run: str | None, covered: str) -> Check:
+    """A check's verdict: failed if it found problems, even when part of it couldn't
+    run; else not run if it couldn't; else passed."""
+    if problems:
+        return Check(name=name, status="failed", reason=covered, problems=problems)
+    if not_run is not None:
+        return Check(name=name, status="not run", reason=not_run)
+    return Check(name=name, status="passed", reason=covered)
+
+
+def _covered(shadow: ShadowRun) -> str:
+    if shadow.scope == "sample":
+        read = (
+            f"a sample: {shadow.records} records from {len(shadow.sampled)} listing pages "
+            "drawn from the last good run's"
+        )
+    else:
+        read = f"the whole source: {shadow.listing_pages} listing pages, {shadow.records} records"
+    if shadow.compared == shadow.known:
+        return f"{read}; all {shadow.known} of the last good run's records compared"
+    return f"{read}; {shadow.compared} of the last good run's {shadow.known} records compared"
 
 
 def _compare(

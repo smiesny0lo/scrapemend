@@ -286,14 +286,14 @@ def proposals(spec: SpecArgument, db: DbOption = DEFAULT_DB) -> None:
         typer.echo("no proposals yet")
         return
     typer.echo(
-        "{:>4}  {:<9} {:>4} {:>5} {:>5}  {:<12} {}".format(
+        "{:>4}  {:<10} {:>4} {:>5} {:>5}  {:<12} {}".format(
             "ID", "STATUS", "BASE", "SCORE", "CONF", "PROVIDER", "CHANGES"
         )
     )
     for p in found:
         changes = ", ".join(p.patch.changes())
         typer.echo(
-            f"{p.id:>4}  {p.status:<9} v{p.base_version:<3} {p.report.score:>5.2f} "
+            f"{p.id:>4}  {p.status:<10} v{p.base_version:<3} {p.report.score:>5.2f} "
             f"{p.patch.confidence:>5.2f}  {p.provider:<12} {changes}"
         )
 
@@ -345,21 +345,23 @@ def promote_command(
     force: Annotated[
         bool,
         typer.Option(
-            help="Apply a proposal made for an older version to the active one (verified again)."
+            help="Promote even if a check could not run (never if one failed), and apply a "
+            "proposal made for an older version to the active one. Verified again either way."
         ),
     ] = False,
     db: DbOption = DEFAULT_DB,
     snapshots: SnapshotsOption = DEFAULT_SNAPSHOTS,
     user_agent: UserAgentOption = DEFAULT_USER_AGENT,
 ) -> None:
-    """Verify a proposal again and make it the active spec version (exit 3 if it no
-    longer passes). Pages are read from the failed run's snapshots where possible."""
+    """Verify a proposal again and make it the active spec version (exit 3 if a check
+    fails, or can't run without --force). Pages are read from the failed run's
+    snapshots where possible; a page that didn't load before is fetched again."""
     state = State(db)
     source_id = _load(spec).id
     found = state.proposals.get(proposal)
     if found is None or found.source_id != source_id:
         _fail(f"{source_id} has no proposal {proposal}")
-    if found.status != "accepted":
+    if found.status not in ("accepted", "unverified"):
         _fail(f"proposal {proposal} is {found.status}: only verified proposals can be promoted")
     active = state.specs.active(source_id)
     if active is None:
@@ -376,9 +378,14 @@ def promote_command(
     verified = state.proposals.get(proposal)
     assert verified is not None
     onto = f" (re-based onto v{active.version})" if found.base_version != active.version else ""
+    skipped = ", ".join(f"{c.name} ({c.reason})" for c in verified.report.not_run)
+    how = (
+        f"promoted with --force although these checks did not run: {skipped}"
+        if skipped
+        else "every check passed; promoted"
+    )
     typer.echo(
-        f"{source_id}: proposal {proposal}{onto} verified again "
-        f"(weakest field {verified.report.score:.0%} of anchors) and promoted; "
+        f"{source_id}: proposal {proposal}{onto} verified again; {how}; "
         f"v{version.version} is now active"
     )
 
@@ -568,17 +575,14 @@ def _print_heal(outcome: HealOutcome) -> None:
 
     err(f"heal: {outcome.status}: {outcome.message}")
     for p in outcome.proposals:
-        verdict = "passed" if p.report.accepted else "rejected"
-        err(
-            f"  proposal {p.id} ({p.provider}, confidence {p.patch.confidence:.2f}): {verdict}, "
-            f"weakest field {p.report.score:.0%} of anchors, {p.report.sample} other pages checked"
-        )
+        confidence = f"confidence {p.patch.confidence:.2f}"
+        err(f"  proposal {p.id} ({p.provider}, {confidence}): {p.report.verdict}")
         if p.patch.changes():
             err(f"    changes: {', '.join(p.patch.changes())}")
-        for problem in p.report.problems[:5]:
-            err(f"    problem: {problem}")
-        for note in p.report.notes:
-            err(f"    note: {note}")
+        for check in p.report.checks:  # every check: passed, failed or not run, and why
+            err(f"    {check.status:<8} {check.name}: {check.reason}")
+            for problem in check.problems[:5]:
+                err(f"      problem: {problem}")
 
 
 def _print_report(report: RunReport, fetcher: HttpFetcher, snapshots: Path) -> None:

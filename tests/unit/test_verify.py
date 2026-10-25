@@ -8,7 +8,7 @@ import pytest
 from scrapemend.extract import Document
 from scrapemend.heal.anchors import Anchor
 from scrapemend.heal.pages import PageFailure
-from scrapemend.heal.verify import verify
+from scrapemend.heal.verify import VerificationReport, verify
 from scrapemend.pipeline import FieldStats, RunSummary
 from scrapemend.spec import SourceSpec
 from scrapemend.spec.models import HealSpec, ItemSpec
@@ -131,9 +131,29 @@ def run(candidate: SourceSpec, pages: FakePages | None = None, **kwargs: Any) ->
     return verify(candidate, anchors, pages, baseline=baseline, known=known, **kwargs)
 
 
+def statuses(report: VerificationReport) -> dict[str, str]:
+    return {check.name: check.status for check in report.checks}
+
+
+def not_run(report: VerificationReport) -> dict[str, str]:
+    return {check.name: check.reason for check in report.checks if check.status == "not run"}
+
+
 def test_a_working_spec_is_accepted() -> None:
     report = run(spec())
     assert report.accepted, report.problems
+    # Every check is listed, with what it covered.
+    assert statuses(report) == {
+        "listing": "passed",
+        "anchors": "passed",
+        "sample": "passed",
+        "known values": "passed",
+        "shadow run": "passed",
+    }
+    assert report.check("shadow run").reason == (
+        "the whole source: 3 listing pages, 50 records; "
+        "all 50 of the last good run's records compared"
+    )
     assert (report.anchors_checked, report.sample, report.listing_items) == (10, 10, 30)
     assert report.score == 1.0
     assert (report.shadow.scope, report.shadow.records, report.shadow.compared) == ("full", 50, 50)
@@ -399,11 +419,72 @@ def test_required_fields_must_be_filled_on_records_the_last_good_run_did_not_hav
 
 
 def test_without_the_last_good_runs_records_the_shadow_run_cannot_run() -> None:
+    # Fail closed: a repair whose shadow run can't run is not accepted. Nothing in it
+    # is wrong, either: only --force can promote it.
     report = run(spec(), known={})
-    assert report.shadow is not None and report.shadow.records == 0
-    assert report.notes == [
-        "the shadow run could not run: the last good run's records are not stored"
-    ]
+    assert not report.accepted and report.verdict == "not run"
+    assert report.problems == []
+    assert not_run(report) == {"shadow run": "the last good run's records are not stored"}
+    assert {name for name, status in statuses(report).items() if status == "passed"} == {
+        "listing",
+        "anchors",
+        "sample",
+        "known values",
+    }
+
+
+def test_a_detail_page_that_cannot_be_fetched_stops_the_shadow_run() -> None:
+    # A timeout or a 5xx after every retry: nothing is known about that record.
+    unreachable = URLS[25]
+    report = run(spec(), FakePages(DETAILS, listing_for(URLS), unreachable={unreachable}))
+    assert report.verdict == "not run"
+    assert not_run(report) == {
+        "shadow run": f"{unreachable} could not be loaded (HTTP 503 after 4 attempts)"
+    }
+
+
+def test_a_listing_page_that_cannot_be_fetched_stops_the_shadow_run() -> None:
+    # Listing page 4 is past the pagination check: only the shadow run gets there.
+    page_4 = f"{BASE}/list?page=4"
+    more = MORE | {
+        f"{BASE}/list?page=3": listing_for(MORE_URLS[10:20], "?page=4"),
+        page_4: listing_for(MORE_URLS[20:30], None),
+    }
+    report = run(spec(), FakePages(DETAILS, listing_for(URLS), more, unreachable={page_4}))
+    assert not_run(report) == {
+        "shadow run": f"listing page 4 could not be loaded (HTTP 503 after 4 attempts): {page_4}"
+    }
+
+
+def test_too_few_comparable_records_stop_the_shadow_run() -> None:
+    # 19 of the last good run's 21 records are still listed: 90% found, but 19 records
+    # to compare is too few to say anything about the rest.
+    listed = list(DETAILS)[:19]
+    known = {k: v for k, v in KNOWN.items() if k in listed} | {
+        f"{BASE}/d/{i}": {"title": f"Title {i}", "city": "City 0", "price": "1"} for i in (98, 99)
+    }
+    pages = FakePages(DETAILS, listing_for(listed, None))
+    report = run(
+        spec(), pages, known=known, baseline=BASELINE.model_copy(update={"listing_pages": 1})
+    )
+    assert report.shadow.compared == 19
+    assert not_run(report) == {"shadow run": "only 19 records can be compared (needs 20)"}
+
+
+def test_a_sample_needs_the_last_good_runs_listing_pages() -> None:
+    sampled = spec().model_copy(update={"heal": HealSpec(shadow_max_items=20)})
+    report = run(sampled)  # BASELINE predates RunSummary.listings
+    assert not_run(report) == {
+        "shadow run": "the last good run's listing pages are not recorded, so none can be "
+        "drawn; set heal.shadow_max_items to null to read the whole source"
+    }
+
+
+def test_a_failed_check_is_not_hidden_by_one_that_did_not_run() -> None:
+    report = run(spec(city={"strategies": [{"css": "h1"}]}), known={})
+    assert report.verdict == "failed"
+    assert statuses(report)["anchors"] == "failed"
+    assert not_run(report) == {"shadow run": "skipped: a quicker check failed"}
 
 
 def test_the_shadow_run_waits_for_the_quick_checks() -> None:
@@ -411,7 +492,7 @@ def test_the_shadow_run_waits_for_the_quick_checks() -> None:
     pages = FakePages(DETAILS, listing_for(URLS))
     report = run(spec(city={"strategies": [{"css": "h1"}]}), pages)
     assert not report.accepted and report.shadow is None
-    assert report.notes == ["the shadow run was skipped: a quicker check failed"]
+    assert not_run(report) == {"shadow run": "skipped: a quicker check failed"}
     assert pages.requested == URLS[:20]
 
 
@@ -425,7 +506,8 @@ def test_anchor_pages_that_fail_to_load_are_tolerated() -> None:
 def test_with_fewer_than_three_anchors_all_must_load() -> None:
     reachable = {u: h for i, (u, h) in enumerate(DETAILS.items()) if i != 1}
     report = run(spec(), FakePages(reachable, listing_for(URLS)), anchors=ANCHORS[:2])
-    assert "only 1 of 2 anchor pages could be loaded" in report.problems
+    assert not report.accepted
+    assert not_run(report)["anchors"] == "only 1 of 2 anchor pages could be loaded"
 
 
 def test_overfitted_to_shown_anchors() -> None:
@@ -668,17 +750,26 @@ def test_needs_the_failed_runs_listing_page() -> None:
     # E.g. `scrapemend promote` pointed at the wrong snapshot directory: without a
     # listing page, no listing check could run, so there is no verdict.
     report = run(spec(), FakePages(DETAILS, listing=None))
-    assert report.problems == ["no listing page of the failed run to verify against"]
+    assert not report.accepted
+    assert not_run(report) == {
+        "listing": "no listing page of the failed run to verify against",
+        "shadow run": "skipped: no listing page to start from",
+    }
 
 
 def test_needs_anchors() -> None:
-    assert "no anchors to verify against" in run(spec(), anchors=[]).problems[0]
+    report = run(spec(), anchors=[])
+    assert not report.accepted
+    assert not_run(report)["anchors"] == (
+        "no anchors to verify against: the source has had no good run yet"
+    )
 
 
 def test_needs_enough_anchor_pages() -> None:
     reachable = {u: h for i, (u, h) in enumerate(DETAILS.items()) if i in (0, 1) or i >= 10}
     report = run(spec(), FakePages(reachable, listing_for(URLS)))
-    assert "only 2 of 10 anchor pages could be loaded" in report.problems
+    assert not report.accepted
+    assert not_run(report)["anchors"] == "only 2 of 10 anchor pages could be loaded"
 
 
 def test_samples_skip_anchor_pages() -> None:

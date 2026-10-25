@@ -6,9 +6,12 @@ verifies it on the pages under the new layout, and feeds the problems of a rejec
 patch back for another attempt. Then:
 
 - promote, in heal.mode "auto", if the failure carries structural evidence (the
-  page fingerprint changed), the patch passed and its confidence is high enough;
+  page fingerprint changed), the patch passed every check and its confidence is
+  high enough;
 - propose: a passed patch otherwise waits for `scrapemend promote`;
-- quarantine: no patch passed, so a human has to look, and an alert goes out.
+- quarantine: no patch passed, so a human has to look, and an alert goes out. A
+  patch whose checks couldn't all run (a page didn't load) is kept as unverified:
+  `scrapemend promote --force` may promote it, never automatically.
 
 Blocked and transient failures are never repaired (the site refused or failed us,
 and that is not a markup problem), and neither is drift (real-world change).
@@ -28,7 +31,7 @@ from scrapemend.heal.context import RepairContext, examples, prune_document, spe
 from scrapemend.heal.pages import Pages, PageSource
 from scrapemend.heal.proposals import Proposal
 from scrapemend.heal.providers import ProviderError, RepairProvider
-from scrapemend.heal.verify import FieldCheck, VerificationReport, verify
+from scrapemend.heal.verify import Check, FieldCheck, VerificationReport, verify
 from scrapemend.pipeline import ValidatedRecord
 from scrapemend.runner import run_source
 from scrapemend.runs import RunReport
@@ -140,13 +143,19 @@ def heal(
             spec.id, spec.version, failed.run_id, provider.name, patch, report
         )
         proposals.append(proposal)
-        if report.accepted:
-            break
+        if report.verdict != "failed":
+            break  # passed, or a check couldn't run, which another attempt can't change
         context = context.with_attempt(patch, report.problems)
 
     accepted = next((p for p in proposals if p.status == "accepted"), None)
+    unverified = next((p for p in proposals if p.status == "unverified"), None)
     if accepted is None:
-        if error:
+        if unverified is not None:
+            reason = (
+                f"proposal {unverified.id} could not be verified: {_not_run(unverified.report)}; "
+                "review it, then promote it with --force, or run heal again"
+            )
+        elif error:
             reason = f"repair provider {provider.name} failed: {error}"
         elif not proposals:
             reason = f"repair provider {provider.name} proposed nothing"
@@ -155,7 +164,8 @@ def heal(
                 proposals[-1].report.problems[:3]
             )
         state.specs.quarantine(spec.id, reason)
-        alert("quarantined" if not proposals else "repair_rejected", reason)
+        rejected = bool(proposals) and unverified is None
+        alert("repair_rejected" if rejected else "quarantined", reason)
         return HealOutcome(
             source_id=spec.id,
             status="quarantined",
@@ -192,8 +202,8 @@ def heal(
 
 
 class PromotionRefused(ValueError):
-    """A proposal can't be promoted: it isn't accepted, it was made for another
-    version than the active one, or it no longer passes verification."""
+    """A proposal can't be promoted: it was rejected, it was made for another
+    version than the active one, or verifying it again failed or couldn't run."""
 
     def __init__(self, message: str, report: VerificationReport | None = None) -> None:
         super().__init__(message)
@@ -201,17 +211,18 @@ class PromotionRefused(ValueError):
 
 
 def promote(state: State, proposal: Proposal, pages: Pages, *, force: bool = False) -> SpecVersion:
-    """Verify an accepted proposal again and store it as the new active spec version.
+    """Verify a proposal again and store it as the new active spec version.
 
     It is verified again against the current anchors on `pages` (the failed run's,
-    see PageSource), because the anchors or the gate may have changed since it was
-    accepted. It must have been made for the active version; with `force`, a
-    proposal made for an older one is applied to the active version instead, and
-    verified like that. The patch is applied to a stored version, so a runtime
-    override (like --start) never leaks into the stored spec.
+    see PageSource), because the anchors or the gate may have changed since, or a
+    page that didn't load may load now. Every check must pass. `force` promotes it
+    when a check couldn't run, never when one failed, and applies a proposal made
+    for an older version than the active one to the active version, verified like
+    that. The patch is applied to a stored version, so a runtime override (like
+    --start) never leaks into the stored spec.
     """
     source_id = proposal.source_id
-    if proposal.status != "accepted":
+    if proposal.status not in ("accepted", "unverified"):
         raise PromotionRefused(f"proposal {proposal.id} is {proposal.status}, not accepted")
     active = state.specs.active(source_id)
     if active is None:
@@ -239,14 +250,23 @@ def promote(state: State, proposal: Proposal, pages: Pages, *, force: bool = Fal
         known=state.anchors.records(source_id),
     )
     state.proposals.reverified(proposal.id, report)
-    if not report.accepted:
+    if report.verdict == "failed":
         raise PromotionRefused(
             f"proposal {proposal.id} no longer passes verification: "
             + "; ".join(report.problems[:3]),
             report,
         )
+    if report.verdict == "not run" and not force:
+        raise PromotionRefused(
+            f"proposal {proposal.id} could not be verified again: {_not_run(report)}; "
+            "pass --force to promote it anyway (never past a check that failed)",
+            report,
+        )
     onto = f", re-based onto v{active.version}" if rebased else ""
     note = f"proposal {proposal.id} by {proposal.provider}{onto}: {proposal.patch.rationale}"
+    if report.not_run:
+        names = ", ".join(check.name for check in report.not_run)
+        note = f"forced past checks that did not run: {names}; {note}"
     stored = state.specs.add(spec, "repair", note.strip()[:500])
     state.specs.activate(source_id, version)
     state.proposals.mark_promoted(proposal.id, version)
@@ -373,11 +393,14 @@ def _skip(spec: SourceSpec, message: str, run: RunReport | None = None) -> HealO
 
 
 def _unusable(spec: SourceSpec, anchors: list[Anchor], problem: str) -> VerificationReport:
+    check = Check(name="patch", status="failed", reason="applied to the spec", problems=[problem])
     return VerificationReport(
-        accepted=False,
+        checks=[check],
         threshold=spec.heal.threshold,
         anchors=len(anchors),
-        anchors_checked=0,
         fields={name: FieldCheck() for name in spec.fields},
-        problems=[problem],
     )
+
+
+def _not_run(report: VerificationReport) -> str:
+    return "; ".join(f"{check.name}: {check.reason}" for check in report.not_run)

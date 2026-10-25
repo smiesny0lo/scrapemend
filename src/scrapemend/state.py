@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS proposals (
     provider         TEXT NOT NULL,
     patch            TEXT NOT NULL,  -- the SpecPatch as JSON
     report           TEXT NOT NULL,  -- the VerificationReport as JSON
-    status           TEXT NOT NULL,  -- accepted | rejected | promoted
+    status           TEXT NOT NULL,  -- accepted | unverified | rejected | promoted
     promoted_version INTEGER,
     created_at       TEXT NOT NULL
 );
