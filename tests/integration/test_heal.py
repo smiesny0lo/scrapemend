@@ -341,6 +341,35 @@ def test_auto_mode_heals_within_one_run(world: World, layout: int) -> None:
     assert world.events.kinds == ["run_failed", "repair_promoted", "run_recovered"]
 
 
+def test_one_spec_heals_through_both_redesigns(world: World) -> None:
+    # v1 -> layout 2 -> v2 -> layout 3 -> v3: one lineage, each repair verified against
+    # the good run of the version before it, and every scrape the same 200 records.
+    def scrape() -> tuple[RunReport, dict[str, Any]]:
+        records: dict[str, Any] = {}
+        report = world.run(on_record=lambda r: records.__setitem__(str(r.url), r.record))
+        return report, records
+
+    _, before = scrape()
+    assert len(before) == 200
+    for layout in (2, 3):
+        world.layout(layout)
+        failed, _ = scrape()
+        assert failed.status == "layout_changed"
+        outcome = world.heal(PatchProvider(load_patch(REPAIRS / f"demo-v{layout}.yaml")))
+        [proposal] = outcome.proposals
+        assert (outcome.status, proposal.base_version) == ("proposed", layout - 1)
+        assert proposal.report.shadow is not None and proposal.report.shadow.compared == 200
+        assert world.promote(proposal).version == layout
+        healed, after = scrape()
+        assert (healed.status, healed.spec_version) == ("ok", layout)
+        assert after == before, f"layout {layout}"
+    assert [v.origin for v in world.state.specs.history("tenders-demo")] == [
+        "file",
+        "repair",
+        "repair",
+    ]
+
+
 # --- review attacks --------------------------------------------------------------------------
 # Repairs that are right on most records, and that the gate used to accept: the anchors
 # missed the records they get wrong. tests/integration/test_verification.py has their
