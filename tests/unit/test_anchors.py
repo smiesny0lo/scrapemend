@@ -2,6 +2,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from scrapemend.extract import FieldResult, RecordResult
 from scrapemend.heal.anchors import (
@@ -10,6 +11,7 @@ from scrapemend.heal.anchors import (
     AnchorStore,
     AnchorValue,
     encode,
+    identity,
     key_of,
     split,
 )
@@ -112,3 +114,28 @@ def test_split_shows_the_first_and_holds_out_the_rest() -> None:
     anchors = [Anchor.from_record(record(i), f"k{i}", "run1") for i in range(10)]
     shown, held_out = split(anchors, 3)
     assert (shown, held_out) == (anchors[:3], anchors[3:])
+
+
+def url_record(origin: str, n: int) -> ValidatedRecord:
+    fields = {"title": FieldResult(f"Notice {n}", f"Notice {n}", 0)}
+    result = RecordResult(url=f"{origin}/notices/TN-{n:04d}", fields=fields)
+    return ValidatedRecord(result, (), snapshot_id=None)
+
+
+def test_anchors_do_not_depend_on_the_host_or_port() -> None:
+    # The same site served from two places keeps the same anchors: they depend only on
+    # the records' keys, with the scheme and host left out of a URL, and a fixed seed.
+    picked = []
+    for origin in ("http://127.0.0.1:8772", "https://tenders.example.org"):
+        picker = AnchorPicker(10, "url", "run")
+        for n in range(200):
+            picker.add(url_record(origin, n))
+        picked.append([urlsplit(a.key).path for a in picker.anchors()])
+    assert picked[0] == picked[1]
+    assert len(set(picked[0])) == 10
+
+
+def test_identity_leaves_out_the_scheme_and_host() -> None:
+    assert identity("http://127.0.0.1:8772/notices/TN-1?lang=en") == "/notices/TN-1?lang=en"
+    assert identity("https://example.org/notices/TN-1") == "/notices/TN-1"
+    assert identity("TN-2026-0001") == "TN-2026-0001"  # a key field's value stays as it is

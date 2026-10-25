@@ -372,28 +372,44 @@ def test_one_spec_heals_through_both_redesigns(world: World) -> None:
 
 # --- review attacks --------------------------------------------------------------------------
 # Repairs that are right on most records, and that the gate used to accept: the anchors
-# missed the records they get wrong. tests/integration/test_verification.py has their
-# exact problems, with anchors that all fit the attack.
+# missed the records they get wrong. Which of them an anchor catches now depends on
+# the anchors; tests/integration/test_verification.py has the shadow run catching
+# each of them with ten anchors that all fit it.
 
 
 @pytest.mark.parametrize(
-    ("fixture", "field"),
+    ("fixture", "problem"),
     [
-        ("v2-value-fitted-to-one-page.yaml", "value"),  # A3: 102 of 200 wrong
-        ("v2-value-drops-millions.yaml", "value"),  # S1: 29 of 200 wrong
-        ("v2-status-enumerates-examples.yaml", "status"),  # S2: 39 of 200 empty
-        ("v2-location-last-word.yaml", "location"),  # S3b: 12 of 200 wrong
+        (  # A3: 102 of 200 values wrong, 6 of them on anchors
+            "v2-value-fitted-to-one-page.yaml",
+            "value reproduces 4/10 anchor values (needs 60% for a volatile field); "
+            "expected '236700', got '36700'",
+        ),
+        (  # S1: 29 of 200 wrong, none of them an anchor
+            "v2-value-drops-millions.yaml",
+            "value changed on 29 of 200 records since the last good run (needs at most 10% "
+            "for a volatile field); expected '1136600', got '136600'",
+        ),
+        (  # S2: 39 of 200 empty, 4 of them anchors: 60% of the anchors still match
+            "v2-status-enumerates-examples.yaml",
+            "status became empty on 39 of 200 records that had a value in the last good run "
+            "(a volatile field may change, but not become empty); expected 'Awarded', got None",
+        ),
+        (  # S3b: 12 of 200 wrong, 1 of them an anchor
+            "v2-location-last-word.yaml",
+            "location reproduces 9/10 anchor values (needs 100%); "
+            "expected 'Fenwick Vale', got 'Vale'",
+        ),
     ],
 )
-def test_review_attacks_are_quarantined(world: World, fixture: str, field: str) -> None:
+def test_review_attacks_are_quarantined(world: World, fixture: str, problem: str) -> None:
     world.layout(2)
     assert world.run().status == "layout_changed"
     outcome = world.heal(PatchProvider(load_patch(BAD / fixture)))
     assert outcome.status == "quarantined"
     [proposal] = outcome.proposals
     assert proposal.status == "rejected"
-    assert proposal.report.problems
-    assert all(problem.startswith(f"{field} ") for problem in proposal.report.problems)
+    assert proposal.report.problems == [problem]
 
 
 def test_a_repair_fitted_to_the_examples_is_not_promoted_automatically(world: World) -> None:

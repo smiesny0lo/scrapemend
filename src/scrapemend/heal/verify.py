@@ -54,7 +54,6 @@ unverified: fail closed. It is never promoted automatically, and only `promote
 --force` can promote it, never past a check that failed.
 """
 
-import hashlib
 import math
 import random
 from collections import Counter
@@ -68,7 +67,14 @@ from pydantic import BaseModel, Field
 from scrapemend.extract import Document, Extractor, RecordResult, patterns
 from scrapemend.extract.select import find_link, select_all
 from scrapemend.extract.strategies import Locating, Strategy, StrategyTimeout, build
-from scrapemend.heal.anchors import Anchor, AnchorValue, KnownRecords, encode, key_of
+from scrapemend.heal.anchors import (
+    Anchor,
+    AnchorValue,
+    KnownRecords,
+    encode,
+    key_of,
+    rank,
+)
 from scrapemend.heal.pages import Pages
 from scrapemend.pipeline import RunSummary
 from scrapemend.spec import RegexSpec, SourceSpec
@@ -699,11 +705,6 @@ def _shadow(
     return run, problems, None
 
 
-def _sample_rank(key: str) -> int:
-    digest = hashlib.sha256(f"{SHADOW_SEED}:{key}".encode()).digest()
-    return int.from_bytes(digest[:8], "big")
-
-
 class _Crawl:
     """The candidate's crawl of the source: listing pages, their items, and each
     item's record. `unavailable` says why it stopped short, if it did: a page that
@@ -772,7 +773,7 @@ class _Crawl:
                 f"the item container finds {found} items on {count} sampled listing pages, "
                 f"where the last good run found {old} (needs {MIN_COVERAGE:.0%})"
             )
-        chosen = sorted(pool, key=_sample_rank)[:cap]
+        chosen = sorted(pool, key=lambda key: rank(key, SHADOW_SEED))[:cap]
         self.drawn = len(chosen)
         for key in chosen:
             record = self._record(key, pool[key])

@@ -477,6 +477,33 @@ def test_verification_reuses_pages_and_stores_the_ones_it_fetched(broken: Broken
     assert report.shadow is not None and report.shadow.compared == 200
 
 
+def test_the_same_site_on_two_ports_keeps_the_same_anchors(tmp_path: Path) -> None:
+    # Anchors used to be picked by hashing the URL, port included, so the same bug was
+    # caught on one deployment and not on another (review attacks S3 and S3b).
+    picked = []
+    for n in range(2):
+        clock = FakeClock()
+        app = create_app(layout=1)
+        app.state.chaos.clock = clock
+        with serve(app) as base_url:
+            data = load_spec(ROOT / "examples" / "sources" / "demo.yaml").model_dump(mode="json")
+            data["fetch"]["start"] = f"{base_url}/notices"
+            spec = SourceSpec.model_validate(data)
+            state = State(tmp_path / f"state-{n}.db")
+            fetcher = HttpFetcher.for_spec(
+                spec.fetch, clock=clock, sleep=clock.sleep, rng=random.Random(0)
+            )
+            snapshots = FilesystemSnapshotStore(tmp_path / f"snapshots-{n}")
+            assert run_source(spec, fetcher, snapshots, state).status == "ok"
+            picked.append(
+                (base_url, [str(a.url).removeprefix(base_url) for a in state.anchors.all(spec.id)])
+            )
+            state.close()
+    (first_url, first), (second_url, second) = picked
+    assert first_url != second_url
+    assert first == second and len(first) == 10
+
+
 def test_diagnosis_uses_anchor_pages(broken: Broken) -> None:
     failed = run_source(broken.spec, broken.new_fetcher(), broken.snapshots, broken.state)
     assert failed.diagnosis is not None

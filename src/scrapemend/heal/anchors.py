@@ -3,7 +3,9 @@
 After every complete good run, the N valid records whose keys hash lowest become
 the source's anchors. Hashing makes the choice stable: the same items keep being
 picked run after run while they exist, so their values stay comparable, and the
-choice is spread over the whole site rather than the first page.
+choice is spread over the whole site rather than the first page. The hash is of
+the key alone, with a fixed seed: a URL's scheme and host are left out, so the same
+site served from another host or port keeps the same anchors.
 
 The values of every valid record of that run are kept too, by key: a repair must
 reproduce them on whichever pages of the failed run were stored.
@@ -14,6 +16,7 @@ import heapq
 import json
 import sqlite3
 from collections.abc import Mapping
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel
 
@@ -28,12 +31,14 @@ __all__ = [
     "AnchorValue",
     "KnownRecords",
     "encode",
+    "identity",
     "key_of",
     "split",
 ]
 
 AnchorValue = Encoded
 KnownRecords = Mapping[str, Mapping[str, AnchorValue]]  # key -> field -> value
+ANCHOR_SEED = "scrapemend-anchors"
 
 
 class Anchor(BaseModel):
@@ -63,8 +68,20 @@ def key_of(record: RecordResult | ValidatedRecord, key_field: str) -> str | None
     return None if value is None else str(value)
 
 
-def _rank(key: str) -> int:
-    return int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big")
+def identity(key: str) -> str:
+    """A record key as it identifies a record wherever the site is served from: a URL
+    without its scheme and host (and port), just its path and query."""
+    if key.startswith(("http://", "https://")):
+        parts = urlsplit(key)
+        return parts.path + (f"?{parts.query}" if parts.query else "")
+    return key
+
+
+def rank(key: str, seed: str) -> int:
+    """Where a key falls in a random order fixed by the seed: a hash of the seed and
+    the key's identity."""
+    digest = hashlib.sha256(f"{seed}:{identity(key)}".encode()).digest()
+    return int.from_bytes(digest[:8], "big")
 
 
 class AnchorPicker:
@@ -86,7 +103,7 @@ class AnchorPicker:
             return
         anchor = Anchor.from_record(record, key, self.run_id)
         self._values[key] = anchor.values
-        heapq.heappush(self._heap, (-_rank(key), key, anchor))
+        heapq.heappush(self._heap, (-rank(key, ANCHOR_SEED), key, anchor))
         if len(self._heap) > self.n:
             heapq.heappop(self._heap)
 
