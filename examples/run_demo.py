@@ -11,7 +11,9 @@ non-zero if any step doesn't do what it should, so CI runs it too.
 """
 
 import argparse
+import io
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -49,7 +51,10 @@ def scrapemend(*args: str, expect: int = 0) -> str:
         capture_output=True,
         text=True,
         encoding="utf-8",
+        errors="replace",
         cwd=ROOT,
+        # Page text (€, ·) in UTF-8, not in Windows' legacy code page for pipes.
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
     for line in (done.stderr + done.stdout).splitlines():
         if line.strip() and not line.startswith("  snapshots:"):
@@ -77,6 +82,8 @@ def main() -> None:
     )
     args = parser.parse_args()
     started = time.monotonic()
+    if isinstance(sys.stdout, io.TextIOWrapper):  # what the CLI reports may not be ASCII
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
 
     port = free_port()
     base = f"http://127.0.0.1:{port}"

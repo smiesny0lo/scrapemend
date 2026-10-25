@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Literal, NoReturn, TextIO
+from typing import Annotated, Literal, NoReturn
 
 import typer
 from pydantic import ValidationError
@@ -70,6 +70,7 @@ def main(
     ] = False,
 ) -> None:
     """Self-healing scraper engine."""
+    _utf8_output()
 
 
 @app.command()
@@ -163,7 +164,7 @@ def run(
         raise typer.Exit(3)
     source = _with_start(active.spec, start)
     repairer = _provider(provider, patch, model)
-    output = out.open("w", encoding="utf-8", newline="\n") if out else _utf8_stdout()
+    output = out.open("w", encoding="utf-8", newline="\n") if out else sys.stdout
 
     def write(record: ValidatedRecord) -> None:
         output.write(json.dumps(record.record, default=_json_value, ensure_ascii=False) + "\n")
@@ -508,11 +509,13 @@ def _notifier(names: list[str] | None) -> Notifier:
     return Notifiers(notifiers)
 
 
-def _utf8_stdout() -> TextIO:
-    # JSONL is UTF-8; a Windows console or pipe may default to a legacy code page.
-    if isinstance(sys.stdout, io.TextIOWrapper):
-        sys.stdout.reconfigure(encoding="utf-8")
-    return sys.stdout
+def _utf8_output() -> None:
+    """Write UTF-8 everywhere. Records, reports and diffs carry page text (€, ·)
+    that a legacy code page, which Windows uses for pipes and files, can't always
+    encode; and whoever reads the output can rely on one encoding."""
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
 def _json_value(value: object) -> str:
