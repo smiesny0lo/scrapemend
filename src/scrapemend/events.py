@@ -2,6 +2,7 @@
 
 import logging
 import sys
+from importlib.metadata import entry_points
 from typing import Literal, Protocol, TextIO
 
 from pydantic import BaseModel, Field
@@ -88,3 +89,20 @@ class Notifiers:
                 notifier.notify(event)
             except Exception:
                 logging.getLogger("scrapemend").exception("notifier %r failed", notifier)
+
+
+ENTRY_POINT_GROUP = "scrapemend.notifiers"
+
+
+def make_notifier(name: str) -> Notifier:
+    """A notifier by name: built in (stdout, log) or registered by a plugin under the
+    `scrapemend.notifiers` entry point group (a callable returning a notifier)."""
+    if name == "stdout":
+        return StreamNotifier()
+    if name == "log":
+        return LogNotifier()
+    for entry_point in entry_points(group=ENTRY_POINT_GROUP):
+        if entry_point.name == name:
+            notifier: Notifier = entry_point.load()()
+            return notifier
+    raise ValueError(f"unknown notifier {name!r} (built in: stdout, log)")

@@ -23,6 +23,8 @@ jobs:
       - run: mypy
 
   test:
+    # Unit and integration tests, including the full heal of demo layouts v2 and v3
+    # through the anthropic provider, replaying Claude's recorded answers (no API key).
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -36,3 +38,17 @@ jobs:
           cache: pip
       - run: pip install -e ".[dev]"
       - run: pytest
+
+  demo:
+    # The README's demo, exactly as a newcomer runs it: break, detect, repair, verify,
+    # promote and scrape again through the real CLI, for both redesigns.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[demo]"
+      - run: python examples/run_demo.py --layout 2
+      - run: python examples/run_demo.py --layout 3

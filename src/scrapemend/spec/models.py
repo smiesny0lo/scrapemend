@@ -110,11 +110,29 @@ class LabelSpec(_Model):
         return {"text": value} if isinstance(value, str) else value
 
 
+class CustomOptions(_Model):
+    name: str = Field(min_length=1)  # what the plugin registered the strategy as
+    options: dict[str, Any] = Field(default_factory=dict)  # passed to the plugin as is
+
+
+class CustomSpec(_Model):
+    """A strategy from a plugin, registered under `name` (see docs/custom-strategies.md).
+    `custom: jsonld` is shorthand for `custom: {name: jsonld}`."""
+
+    custom: CustomOptions
+
+    @field_validator("custom", mode="before")
+    @classmethod
+    def _shorthand(cls, value: Any) -> Any:
+        return {"name": value} if isinstance(value, str) else value
+
+
 _STRATEGY_TAGS: dict[type[BaseModel], str] = {
     CssSpec: "css",
     XPathSpec: "xpath",
     LabelSpec: "label",
     RegexSpec: "regex",
+    CustomSpec: "custom",
 }
 
 
@@ -130,11 +148,12 @@ StrategySpec = Annotated[
     Annotated[CssSpec, Tag("css")]
     | Annotated[XPathSpec, Tag("xpath")]
     | Annotated[LabelSpec, Tag("label")]
-    | Annotated[RegexSpec, Tag("regex")],
+    | Annotated[RegexSpec, Tag("regex")]
+    | Annotated[CustomSpec, Tag("custom")],
     Discriminator(
         _strategy_tag,
         custom_error_type="strategy_type",
-        custom_error_message="expected exactly one of: css, xpath, label, regex",
+        custom_error_message="expected exactly one of: css, xpath, label, regex, custom",
     ),
 ]
 """Any extraction strategy, used for field values."""

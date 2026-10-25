@@ -151,7 +151,13 @@ def test_repair_overfitted_to_the_shown_anchors_is_rejected(broken: Broken, fiel
     report = broken.check(good.model_copy(update={"fields": fields}))
 
     assert not report.accepted
-    assert report.fields[field].matched == len(shown)  # perfect on what it was shown
+    # Perfect on what it was shown, and on held-out anchors only where they happen to
+    # share a shown value (titles repeat: "Street sweeping - Ashgrove" can occur twice).
+    memorised_values = {a.values[field] for a in shown}
+    assert report.fields[field].matched == sum(
+        a.values[field] in memorised_values for a in broken.anchors
+    )
+    assert report.fields[field].matched < report.fields[field].compared
     assert report.fields[field].compared == len(shown) + len(held_out)
 
 

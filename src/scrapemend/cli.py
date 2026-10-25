@@ -16,7 +16,9 @@ from pydantic import ValidationError
 
 from scrapemend import __version__
 from scrapemend.detect.classify import Status
-from scrapemend.events import LogNotifier, Notifier, Notifiers, StreamNotifier
+from scrapemend.events import Notifier, Notifiers, make_notifier
+from scrapemend.extract import Extractor
+from scrapemend.extract.strategies import UnknownStrategy
 from scrapemend.fetch import DEFAULT_USER_AGENT, HttpFetcher
 from scrapemend.heal.context import spec_yaml
 from scrapemend.heal.ladder import HealOutcome, heal, promote, rollback, run_and_heal
@@ -117,7 +119,7 @@ DEFAULT_SNAPSHOTS = Path("snapshots")
 @app.command()
 def validate(spec: SpecArgument) -> None:
     """Check a spec file and report every problem with its line number."""
-    source = _load(spec)
+    source = _buildable(_load(spec))
     fields = ", ".join(source.fields)
     typer.echo(f"{spec}: ok ({source.id} v{source.version}, {len(source.fields)} fields: {fields})")
 
@@ -134,6 +136,10 @@ def run(
         bool, typer.Option(help="Also write records that failed validation.")
     ] = False,
     force: Annotated[bool, typer.Option(help="Run even if the source is quarantined.")] = False,
+    patch: Annotated[
+        Path | None,
+        typer.Option(help="If the run breaks, try this hand-written repair (YAML)."),
+    ] = None,
     provider: ProviderOption = "none",
     model: ModelOption = None,
     start: StartOption = None,
@@ -156,7 +162,7 @@ def run(
         typer.echo("repair it (scrapemend heal / promote / rollback) or pass --force", err=True)
         raise typer.Exit(3)
     source = _with_start(active.spec, start)
-    repairer = _provider(provider, None, model)
+    repairer = _provider(provider, patch, model)
     output = out.open("w", encoding="utf-8", newline="\n") if out else _utf8_stdout()
 
     def write(record: ValidatedRecord) -> None:
@@ -429,10 +435,22 @@ def _load(spec: Path) -> SourceSpec:
         raise typer.Exit(1) from None
 
 
+def _buildable(source: SourceSpec) -> SourceSpec:
+    """Fail early, before any request, if a custom strategy's plugin is missing."""
+    try:
+        Extractor(source.fields)
+    except UnknownStrategy as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from None
+    return source
+
+
 def _active(state: State, spec: Path) -> SpecVersion:
     """Register the spec file's version and return the version that should run."""
     try:
-        return state.specs.register(_load(spec))
+        active = state.specs.register(_buildable(_load(spec)))
+        _buildable(active.spec)
+        return active
     except SpecConflict as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from None
@@ -480,13 +498,13 @@ def _interruptible() -> Iterator[None]:
 def _notifier(names: list[str] | None) -> Notifier:
     notifiers: list[Notifier] = []
     for name in names or []:
-        if name == "stdout":
-            notifiers.append(StreamNotifier())
-        elif name == "log":
-            notifiers.append(LogNotifier())
-        elif name != "none":
-            typer.echo(f"--notify: unknown notifier {name!r} (use stdout, log)", err=True)
-            raise typer.Exit(1)
+        if name == "none":
+            continue
+        try:
+            notifiers.append(make_notifier(name))
+        except ValueError as e:
+            typer.echo(f"--notify: {e}", err=True)
+            raise typer.Exit(1) from None
     return Notifiers(notifiers)
 
 

@@ -10,6 +10,7 @@ from scrapemend.spec.loader import (
 )
 from scrapemend.spec.models import (
     CssSpec,
+    CustomSpec,
     FieldSpec,
     LabelSpec,
     RegexSpec,
@@ -21,6 +22,7 @@ from scrapemend.spec.models import (
 
 __all__ = [
     "CssSpec",
+    "CustomSpec",
     "FieldSpec",
     "LabelSpec",
     "Problem",

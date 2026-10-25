@@ -26,10 +26,10 @@ htmlcov/
 *.sqlite
 *.sqlite3
 
-# Local planning notes
+# Local planning notes (docs/ is public, apart from the design notes)
 CLAUDE.md
 ROADMAP.md
-docs/
+docs/DESIGN.md
 
 # Editors / OS
 .idea/
