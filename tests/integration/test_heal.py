@@ -1177,6 +1177,91 @@ def test_cli_promote_force_past_checks_that_did_not_run(world: World) -> None:
     ) in forced.output
 
 
+def evidence(output: str, field: str) -> str:
+    """The report's line for one field."""
+    return next(line.strip() for line in output.splitlines() if line.strip().startswith(field))
+
+
+def test_every_report_says_what_each_field_changed(world: World) -> None:
+    # B1's report read word for word like the correct repair's: the 5 values it
+    # changed were within the allowance, and nothing said so.
+    world.layout(2)
+    world.run()
+    b1 = cli_run(world, "heal", "--patch", str(BAD / "v2-value-misreads-over-2m.yaml"))
+    correct = cli_run(world, "heal", "--patch", str(REPAIRS / "demo-v2.yaml"))
+    assert (b1.exit_code, correct.exit_code) == (3, 0), b1.output + correct.output
+    rule = "(volatile: up to 20 may change, none may become empty)"
+    assert (
+        evidence(b1.output, "value:")
+        == f"value: 200 compared, 5 changed, 0 emptied {rule}: tolerated 5"
+    )
+    assert (
+        evidence(correct.output, "value:")
+        == f"value: 200 compared, 0 changed, 0 emptied {rule}: none"
+    )
+    for output in (b1.output, correct.output):
+        assert "fields, on the 200 records of the last good run it compared:" in output
+        assert "records: found 200 of the last good run's 200 (at least 180 needed)" in output
+    promoted = cli_run(world, "promote", "2")  # verified again: the same evidence
+    assert promoted.exit_code == 0, promoted.output
+    assert evidence(promoted.output, "value:") == evidence(correct.output, "value:")
+
+
+def test_promote_force_prints_the_evidence_before_promoting(world: World) -> None:
+    world.layout(2)
+    world.run()
+    forget_the_good_records(world)  # the shadow run can't run: the anchors' fields are shown
+    cli_run(world, "heal", "--patch", str(REPAIRS / "demo-v2.yaml"))
+    forced = cli_run(world, "promote", "1", "--force")
+    assert forced.exit_code == 0, forced.output
+    out = forced.output
+    shown = out.index("fields, on the 10 anchor pages it compared:")
+    assert out.index("not run  shadow run") < shown < out.index("promoted with --force")
+    assert "value: 10 compared, 0 changed, 0 emptied" in out
+
+
+def test_force_sees_what_a_shadow_run_that_stopped_had_compared(world: World) -> None:
+    # Review attack S1 (value drops the millions) with a detail page that keeps failing:
+    # the shadow run stopped after 29 records, 6 of them with a changed value (21%).
+    # The rules can't fail it on so few, so --force may promote it; the evidence it is
+    # shown says what was seen, before anything is stored.
+    world.layout(2)
+    failed = world.run()
+    down = f"{world.site.base_url}/notices/TN-2026-0091"  # the 30th in listing order
+    spec = world.spec
+    outcome = heal(
+        spec, world.state, world.snapshots, Unreachable(fetcher(world.site, spec), down),
+        PatchProvider(load_patch(BAD / "v2-value-drops-millions.yaml")), run_id=failed.run_id,
+    )  # fmt: skip
+    [proposal] = outcome.proposals
+    assert proposal.status == "unverified"
+    pages = PageSource(
+        world.snapshots,
+        "tenders-demo",
+        failed.run_id,
+        fetcher=Unreachable(fetcher(world.site, spec), down),
+    )
+    seen: list[tuple[list[str], int]] = []
+
+    def shown(report: VerificationReport) -> None:
+        active = world.state.specs.active("tenders-demo")
+        assert active is not None
+        seen.append((report.evidence(), active.version))
+
+    promote(world.state, proposal, pages, force=True, on_verified=shown)
+    [(lines, version)] = seen
+    assert version == 1  # shown before the promotion
+    assert lines[0] == (
+        "fields, on the 29 records of the last good run it compared before it stopped, of "
+        "the 200 it would have:"
+    )
+    assert (
+        "  value: 29 compared, 6 changed, 0 emptied (volatile: up to 20 of 200 may change, "
+        "none may become empty): tolerated 6"
+    ) in lines
+    assert "records: found 29 of the last good run's 200 before it stopped: not judged" in lines
+
+
 def test_cli_promote_refuses_a_proposal_for_another_version(world: World) -> None:
     world.layout(2)
     world.run()

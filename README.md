@@ -44,6 +44,13 @@ It starts a local demo site and scrapes it, then redesigns the site underneath t
       passed   known values: category, location, status on 20 pages
       passed   shadow run: the whole source: 10 listing pages, 200 records; all 200 of the last
                good run's records compared
+      fields, on the 200 records of the last good run it compared:
+        reference: 200 compared, 0 changed, 0 emptied (stable: none may differ): none
+        ...
+        value: 200 compared, 0 changed, 0 emptied (volatile: up to 20 may change, none may
+          become empty): none
+        ...
+      records: found 200 of the last good run's 200 (at least 180 needed)
 
 == 3. What the verified repair changes (it waits for a human to promote it)
   -    css: table.notices tr.notice
@@ -52,6 +59,8 @@ It starts a local demo site and scrapes it, then redesigns the site underneath t
 == 4. Promote it: the repaired spec becomes version 2
   promote: shadow run: the whole source, all 200 of the last good run's records: every page
     it reads is stored, so no requests
+  promote: verified again: passed
+    ... (the same checks and fields)
   tenders-demo: proposal 1 verified again; every check passed; promoted; v2 is now active
 == 5. Scrape the redesigned site again
   tenders-demo v2, run 20261025T223831Z-ef9f: 10 listing pages, 200 items, 200 records, 0 invalid, 0 failed

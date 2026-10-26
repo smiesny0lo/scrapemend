@@ -31,7 +31,7 @@ from scrapemend.heal.ladder import (
 )
 from scrapemend.heal.pages import PageSource
 from scrapemend.heal.providers import PatchProvider, ProviderError, RepairProvider, make_provider
-from scrapemend.heal.verify import ShadowPlan
+from scrapemend.heal.verify import ShadowPlan, VerificationReport
 from scrapemend.pipeline import ValidatedRecord
 from scrapemend.runner import ConfirmRefused, DriftNotAccepted, accept_drift, confirm, run_source
 from scrapemend.runs import RunReport
@@ -372,7 +372,14 @@ def promote_command(
             store, source_id, found.run_id, fetcher=fetcher, spec_version=found.base_version
         )
         try:
-            version = promote(state, found, pages, force=force, on_shadow=_print_plan("promote"))
+            version = promote(
+                state,
+                found,
+                pages,
+                force=force,
+                on_shadow=_print_plan("promote"),
+                on_verified=_print_verified,  # before it is promoted, with --force too
+            )
         except PromotionRefused as e:
             _fail(str(e), 1 if e.report is None else 3)
     verified = state.proposals.get(proposal)
@@ -698,10 +705,23 @@ def _print_heal(outcome: HealOutcome) -> None:
         err(f"  proposal {p.id} ({p.provider}, {confidence}): {p.report.verdict}")
         if p.patch.changes():
             err(f"    changes: {', '.join(p.patch.changes())}")
-        for check in p.report.checks:  # every check: passed, failed or not run, and why
-            err(f"    {check.status:<8} {check.name}: {check.reason}")
-            for problem in check.problems[:5]:
-                err(f"      problem: {problem}")
+        _print_checks(p.report, "    ")
+
+
+def _print_verified(report: VerificationReport) -> None:
+    typer.echo(f"promote: verified again: {report.verdict}", err=True)
+    _print_checks(report, "  ")
+
+
+def _print_checks(report: VerificationReport, indent: str) -> None:
+    """Every check (passed, failed or not run, and why), then what was compared, field
+    by field, and what the rules tolerated."""
+    for check in report.checks:
+        typer.echo(f"{indent}{check.status:<8} {check.name}: {check.reason}", err=True)
+        for problem in check.problems[:5]:
+            typer.echo(f"{indent}  problem: {problem}", err=True)
+    for line in report.evidence():
+        typer.echo(f"{indent}{line}", err=True)
 
 
 def _requests(sent: Requests) -> str:

@@ -88,9 +88,16 @@ heal: proposed: proposal 1 passed verification (heal.mode is propose); promote i
     passed   sample: 10 other pages
     passed   known values: category, location, status on 20 pages
     passed   shadow run: the whole source: 10 listing pages, 200 records; all 200 of the last good run's records compared
+    fields, on the 200 records of the last good run it compared:
+      reference: 200 compared, 0 changed, 0 emptied (stable: none may differ): none
+      ...
+      value: 200 compared, 0 changed, 0 emptied (volatile: up to 20 may change, none may become empty): none
+      ...
+    records: found 200 of the last good run's 200 (at least 180 needed)
+    judged on their own: every value of category (7), location (16) and status (3); the records where value was empty; the 10 largest and the 10 smallest values of value
 ```
 
-Every field reproduced the known values on all 10 anchor pages, and the next-page link led through three listing pages of new notices. Then the **shadow run**, which said before it started what it would read: the repaired spec crawled the whole site (`shadow_max_items: all` in the demo spec), 187 requests at the spec's rate limit for the pages not stored yet, and read every one of the 200 notices exactly as the good run had. The pages it fetched are stored, so `promote` needs none of them again.
+Every field reproduced the known values on all 10 anchor pages, and the next-page link led through three listing pages of new notices. Then the **shadow run**, which said before it started what it would read: the repaired spec crawled the whole site (`shadow_max_items: all` in the demo spec), 187 requests at the spec's rate limit for the pages not stored yet, and read every one of the 200 notices exactly as the good run had: no field changed or became empty on any of them. A volatile field like `value` could have changed on up to 20, and the report would have said so. The pages it fetched are stored, so `promote` needs none of them again.
 
 To see a rejection, try a repair that maps one field wrongly:
 

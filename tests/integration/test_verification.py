@@ -8,12 +8,14 @@ import random
 import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi import FastAPI
+from starlette.types import Receive, Scope, Send
 
 from examples.mutating_site.app import create_app
 from examples.mutating_site.records import Notice, generate_notices
@@ -85,21 +87,34 @@ class Broken:
         return anchors
 
 
+class Switch:
+    """A site whose app can be swapped while it is served, at the same address."""
+
+    def __init__(self, app: FastAPI) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self.app(scope, receive, send)
+
+
 @contextmanager
 def redesigned(
     tmp_path: Path,
     layout: int,
     notices: list[Notice] | None = None,
     change: Callable[[dict[str, Any]], None] | None = None,
+    after: list[Notice] | None = None,
 ) -> Iterator[Broken]:
     """The demo site (or one serving `notices`) after a good run on layout v1, then a
-    redesign to `layout` and a failed run. `change` edits demo.yaml's data first."""
+    redesign to `layout` (serving `after`, if given) and a failed run. `change` edits
+    demo.yaml's data first."""
     clock = FakeClock()
     app = create_app(layout=1, notices=notices)
     app.state.chaos.clock = clock
+    site = Switch(app)
     state = State(tmp_path / "state.db")
     snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
-    with serve(app) as base_url:
+    with serve(site) as base_url:
         data = load_spec(ROOT / "examples" / "sources" / "demo.yaml").model_dump(mode="json")
         data["fetch"]["start"] = f"{base_url}/notices"
         if change is not None:
@@ -112,6 +127,9 @@ def redesigned(
             )
 
         assert run_source(spec, fetcher(), snapshots, state).status == "ok"
+        if after is not None:
+            app = site.app = create_app(layout=layout, notices=after)
+            app.state.chaos.clock = clock
         app.state.layout = layout
         failed = run_source(spec, fetcher(), snapshots, state)
         assert failed.status == "layout_changed"
@@ -522,6 +540,49 @@ def test_a_sample_must_find_every_kind_of_record(big: Broken) -> None:
     [problem] = report.problems
     assert problem.startswith("the shadow run found 0 of the "), problem
     assert "records of the last good run whose value was empty" in problem
+
+
+def published_since(count: int) -> list[Notice]:
+    """The demo's 200 notices and `count` more, published in December 2026, after the
+    last good run, with their deadlines in 2027."""
+    notices = generate_notices(count=200 + count)
+    since = [
+        replace(
+            n,
+            published=date(2026, 12, 10) + timedelta(days=i % 20),
+            deadline=date(2027, 1, 5) + timedelta(days=(i * 7) % 50),
+        )
+        for i, n in enumerate(notices[200:])
+    ]
+    return notices[:200] + since
+
+
+@pytest.fixture(scope="module")
+def newer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Broken]:
+    """The demo site redesigned to layout v2, with 20 notices published since the good
+    run: records the last good run didn't have."""
+    with redesigned(tmp_path_factory.mktemp("newer"), 2, after=published_since(20)) as b:
+        yield b
+
+
+def test_a_report_says_which_records_got_only_the_lighter_checks(newer: Broken) -> None:
+    # Review attack B2: deadline hard-codes 2026, with a fallback that reads the first
+    # date in 2026 on the page. It is right on every record the last good run had, and
+    # reads the publication date on the 20 published since, whose deadlines are in
+    # 2027. The gate can't catch that (verification.md, what it can't catch): only the
+    # required fields and the small sets of values of new records are judged. It passes,
+    # and the report says what it didn't judge.
+    report = newer.check(load_patch(BAD / "v2-deadline-year-2026.yaml"))
+    assert report.accepted, report.problems
+    assert report.shadow is not None and (report.shadow.new, report.shadow.compared) == (20, 200)
+    evidence = report.evidence()
+    assert "  deadline: 200 compared, 0 changed, 0 emptied (stable: none may differ): none" in (
+        evidence
+    )
+    assert (
+        "new: 20 records the last good run didn't have: only their required fields, and "
+        "fields with a small set of values, were checked"
+    ) in evidence
 
 
 def test_unloadable_anchor_pages_are_tolerated(broken: Broken) -> None:

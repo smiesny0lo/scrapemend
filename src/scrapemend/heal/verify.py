@@ -113,6 +113,7 @@ class Mismatch(BaseModel):
 class FieldCheck(BaseModel):
     matched: int = 0
     compared: int = 0
+    emptied: int = 0  # of the mismatches, those that read nothing
     volatile: bool = False
     mismatches: list[Mismatch] = Field(default_factory=list)  # the first few
 
@@ -158,6 +159,13 @@ class ShadowRun(BaseModel):
     records: int = 0  # records read, each key once
     known: int = 0  # records the last good run had
     compared: int = 0  # records read whose key the last good run had
+    new: int = 0  # records read whose key it didn't: only checked for required fields...
+    found: int = 0  # of the last good run's records, those read (or in a sample, listed)
+    items_before: int = 0  # items the last good run found on its listing pages
+    stopped: int | None = None  # stopped at a page: the most records it could have compared
+    values: dict[str, int] = Field(default_factory=dict)  # small sets: field -> values judged
+    empties: list[str] = Field(default_factory=list)  # fields whose empty records were judged
+    extremes: list[str] = Field(default_factory=list)  # number fields judged at their ends
     fields: dict[str, ShadowField] = Field(default_factory=dict)
 
 
@@ -235,6 +243,16 @@ class VerificationReport(BaseModel):
     def score(self) -> float:
         """The weakest field's share of reproduced anchor values."""
         return min((f.rate for f in self.fields.values()), default=0.0)
+
+    def evidence(self) -> list[str]:
+        """What the gate compared, field by field, and what the rules tolerated, for
+        every verdict: whoever promotes a repair sees what it let through. From the
+        shadow run if it compared records, else from the anchors."""
+        if self.shadow is not None and self.shadow.compared:
+            return _shadow_evidence(self, self.shadow)
+        if self.anchors_checked:
+            return _anchor_evidence(self)
+        return []
 
 
 def verify(
@@ -380,6 +398,103 @@ def verify(
     )
 
 
+def _allowed(share: float, out_of: int) -> int:
+    """How many of `out_of` records a rule that allows `share` of them lets through."""
+    return math.floor(share * out_of + 1e-9)
+
+
+def _needed(share: float, out_of: int) -> int:
+    """How many of `out_of` records a rule that requires `share` of them needs."""
+    return math.ceil(share * out_of - 1e-9)
+
+
+def _shadow_evidence(report: VerificationReport, shadow: ShadowRun) -> list[str]:
+    if shadow.stopped is None:
+        lines = [f"fields, on the {shadow.compared} records of the last good run it compared:"]
+    else:
+        lines = [
+            f"fields, on the {shadow.compared} records of the last good run it compared before "
+            f"it stopped, of the {shadow.stopped} it would have:"
+        ]
+    for name, f in shadow.fields.items():
+        if not f.compared:
+            continue
+        base = f.compared if shadow.stopped is None else max(shadow.stopped, f.compared)
+        of = "" if shadow.stopped is None else f" of {base}"
+        empty = _allowed(1 - report.threshold, base)
+        if f.volatile:
+            change = _allowed(report.volatile_change, base)
+            emptied = "none may become empty" if not empty else f"up to {empty} may become empty"
+            rule = f"volatile: up to {change}{of} may change, {emptied}"
+            over = f.changed > change or f.emptied > empty
+        else:
+            rule = (
+                "stable: none may differ" if not empty else f"stable: up to {empty}{of} may differ"
+            )
+            over = f.changed + f.emptied > empty
+        differ = f.changed + f.emptied
+        outcome = "more than allowed" if over else f"tolerated {differ}" if differ else "none"
+        lines.append(
+            f"  {name}: {f.compared} compared, {f.changed} changed, {f.emptied} emptied ({rule}): "
+            f"{outcome}"
+        )
+    known = shadow.known
+    if shadow.stopped is not None:
+        lines.append(
+            f"records: found {shadow.found} of the last good run's {known} before it stopped: "
+            "not judged"
+        )
+        return lines
+    if shadow.scope == "sample":
+        lines.append(
+            f"records: {shadow.items} items on {shadow.listing_pages} listing pages, where the "
+            f"last good run found {shadow.items_before} (at least "
+            f"{_needed(report.min_found, shadow.items_before)} needed); the detail pages of "
+            f"{shadow.drawn} of them read, {shadow.compared} of them known from the last good run"
+        )
+    else:
+        lines.append(
+            f"records: found {shadow.found} of the last good run's {known} (at least "
+            f"{_needed(report.min_found, known)} needed)"
+        )
+    if shadow.new:
+        lines.append(
+            f"new: {shadow.new} record{'s' if shadow.new > 1 else ''} the last good run didn't "
+            "have: only their required fields, and fields with a small set of values, were "
+            "checked"
+        )
+    values = [f"{name} ({count})" for name, count in shadow.values.items()]
+    judged = [f"every value of {_and(values)}"] if values else []
+    judged += [f"the records where {name} was empty" for name in shadow.empties]
+    judged += [f"the 10 largest and the 10 smallest values of {name}" for name in shadow.extremes]
+    if judged:
+        lines.append(f"judged on their own: {'; '.join(judged)}")
+    return lines
+
+
+def _and(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def _anchor_evidence(report: VerificationReport) -> list[str]:
+    lines = [f"fields, on the {report.anchors_checked} anchor pages it compared:"]
+    for name, f in report.fields.items():
+        if not f.compared:
+            continue
+        must = _needed(report.volatile_match if f.volatile else report.threshold, f.compared)
+        kind = "volatile" if f.volatile else "stable"
+        rule = f"all {must}" if must == f.compared else f"{must} of {f.compared}"
+        differ = f.compared - f.matched
+        outcome = (
+            "too few match" if f.matched < must else f"tolerated {differ}" if differ else "none"
+        )
+        lines.append(
+            f"  {name}: {f.compared} compared, {differ - f.emptied} changed, {f.emptied} emptied "
+            f"({kind}: {rule} must match): {outcome}"
+        )
+    return lines
+
+
 def _check(name: str, problems: list[str], not_run: str | None, covered: str) -> Check:
     """A check's verdict: failed if it found problems, even when part of it couldn't
     run; else not run if it couldn't; else passed."""
@@ -438,7 +553,9 @@ def _compare(
         check.compared += 1
         if want == got:
             check.matched += 1
-        elif len(check.mismatches) < EXAMPLES:
+            continue
+        check.emptied += got is None
+        if len(check.mismatches) < EXAMPLES:
             check.mismatches.append(Mismatch(url=url, expected=want, got=got))
 
 
@@ -719,9 +836,12 @@ def _shadow(
         records = crawl.all(first)
     for key, result in records:
         comparison.add(key, result)
+    run.new, run.found = comparison.new, run.compared
+    run.items_before = baseline.items if baseline is not None else 0
     if crawl.unavailable is not None:
         # Stopped short: what it compared may still prove the candidate wrong.
         most = run.drawn if sampled else len(known)
+        run.stopped = most
         problems = comparison.problems(threshold, spec.heal.volatile_change, out_of=most)
         stopped = crawl.unavailable
         if run.listing_pages:
@@ -755,12 +875,15 @@ def _shadow(
             f"(needs {min_found:.0%}): the item container, the detail links or the "
             "pagination miss some"
         )
-    if len(problems) == before:  # most records were found: most of every kind must be
-        if not sampled:
-            problems += _kind_problems(spec, known, baseline, set(comparison.compared), min_found)
-        elif spec.item.key == "url":  # the links on the listing pages are the keys
-            listed = crawl.listed & known.keys()
-            problems += _kind_problems(spec, known, baseline, listed, min_found)
+    if sampled and spec.item.key == "url":  # the links on the listing pages are the keys
+        run.found = len(crawl.listed & known.keys())
+    if len(problems) == before and (not sampled or spec.item.key == "url"):
+        # Most records were found: most of every kind must be.
+        found = set(comparison.compared) if not sampled else crawl.listed & known.keys()
+        kinds = _kinds(spec, known, baseline, known)
+        problems += _kind_problems(kinds, known, found, min_found)
+        run.values = dict(Counter(name for name, value in kinds if value is not None))
+        run.empties = [name for name, value in kinds if value is None]
     problems += comparison.problems(threshold, spec.heal.volatile_change)
     needed = min(MIN_SHADOW_RECORDS, len(known))
     if not problems and run.compared < needed:
@@ -769,9 +892,8 @@ def _shadow(
 
 
 def _kind_problems(
-    spec: SourceSpec,
+    kinds: Mapping[tuple[str, AnchorValue], list[str]],
     known: KnownRecords,
-    baseline: RunSummary | None,
     found: set[str],
     min_found: float,
 ) -> list[str]:
@@ -781,7 +903,7 @@ def _kind_problems(
     in every run. `found`: the keys of the last good run's records it found."""
     missing = (len(known) - len(found)) / len(known)
     problems = []
-    for (name, value), members in _kinds(spec, known, baseline, known).items():
+    for (name, value), members in kinds.items():
         got = sum(key in found for key in members)
         if got >= min_found * len(members):
             continue
@@ -1112,21 +1234,21 @@ class _Comparison:
             base = f.compared if out_of is None else max(out_of, f.compared)
             found = len(problems)
             if not f.volatile:
-                if f.compared - f.matched > (1 - threshold) * base:
+                if f.compared - f.matched > _allowed(1 - threshold, base):
                     e = f.mismatches[0]
                     problems.append(
                         f"{name} reproduces {f.matched}/{f.compared} values of the last good run "
                         f"(needs {threshold:.0%}); expected {e.expected!r}, got {e.got!r}"
                     )
             else:
-                if f.emptied > (1 - threshold) * base:
+                if f.emptied > _allowed(1 - threshold, base):
                     e = f.example(emptied=True)
                     problems.append(
                         f"{name} became empty on {f.emptied} of {f.compared} records that had a "
                         "value in the last good run (a volatile field may change, but not become "
                         f"empty); expected {e.expected!r}, got None"
                     )
-                if f.changed > volatile_change * base:
+                if f.changed > _allowed(volatile_change, base):
                     e = f.example(emptied=False)
                     problems.append(
                         f"{name} changed on {f.changed} of {f.compared} records since the last "
@@ -1157,11 +1279,13 @@ class _Comparison:
             f = self.run.fields[name]
             if name in failing or not f.compared:
                 continue
+            if name not in self.run.extremes:
+                self.run.extremes.append(name)
             differs = self.differs[name]
             wrong = [key for key in members if key in differs]
             allowed = volatile_change if f.volatile else 1 - threshold
             overall = f.compared - f.matched
-            if len(wrong) <= allowed * len(members):
+            if len(wrong) <= _allowed(allowed, len(members)):
                 continue
             if not _improbable(len(wrong), len(members), overall / f.compared):
                 continue

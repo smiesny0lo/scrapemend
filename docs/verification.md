@@ -30,9 +30,24 @@ proposal 2 (patch:v2-status-enumerates-examples.yaml, confidence 0.90): failed
   passed   known values: category, location, status on 20 pages
   failed   shadow run: the whole source: 10 listing pages, 200 records; all 200 of the last good run's records compared
     problem: status became empty on 39 of 200 records that had a value in the last good run (a volatile field may change, but not become empty); expected 'Awarded', got None
+  fields, on the 200 records of the last good run it compared:
+    reference: 200 compared, 0 changed, 0 emptied (stable: none may differ): none
+    ...
+    value: 200 compared, 0 changed, 0 emptied (volatile: up to 20 may change, none may become empty): none
+    status: 200 compared, 0 changed, 39 emptied (volatile: up to 20 may change, none may become empty): more than allowed
+    description: 200 compared, 0 changed, 0 emptied (stable: none may differ): none
+  records: found 200 of the last good run's 200 (at least 180 needed)
+  judged on their own: every value of category (7), location (16) and status (3); the records where value was empty; the 10 largest and the 10 smallest values of value
 ```
 
 That repair reads `status` with a regex that only knows the values of the examples a provider is shown, `^(Open|Closed)$`. It is right on six of the ten anchors, which is enough for a volatile field there, and wrong on every Awarded notice: the shadow run sees all 39.
+
+After the checks, every report says what was compared, field by field: how many values changed, how many became empty, what the rules allow, and what they tolerated. That holds whether the repair passed, failed or is about to be forced. It is the shadow run's comparison if it compared any records, the anchors' otherwise. Then come the records it found, how many were new since the last good run (only their required fields and small sets of values are checked), and what it judged on its own. A report that passed says what it let through, so whoever promotes the repair can see it:
+
+```
+    value: 200 compared, 5 changed, 0 emptied (volatile: up to 20 may change, none may become empty): tolerated 5
+  new: 20 records the last good run didn't have: only their required fields, and fields with a small set of values, were checked
+```
 
 ### The quick checks
 
@@ -115,7 +130,22 @@ heal: quarantined: proposal 1 could not be verified: shadow run: the last good r
 $ scrapemend promote examples/sources/demo.yaml 1
 proposal 1 could not be verified again: shadow run: the last good run's records are not stored; pass --force to promote it anyway (never past a check that failed)
 $ scrapemend promote examples/sources/demo.yaml 1 --force
+promote: verified again: not run
+  ...
+  not run  shadow run: the last good run's records are not stored
+  fields, on the 10 anchor pages it compared:
+    reference: 10 compared, 0 changed, 0 emptied (stable: all 10 must match): none
+    ...
 tenders-demo: proposal 1 verified again; promoted with --force although these checks did not run: shadow run (the last good run's records are not stored); v2 is now active
+```
+
+`promote` prints the whole report, checks and fields, before it promotes anything, and with `--force` too. A shadow run that stopped at a page it couldn't fetch shows what it had compared by then: with a detail page that kept failing, a `value` that drops the millions had changed on 6 of the 29 records compared, which the rules can't fail on so few, but a human can:
+
+```
+  fields, on the 29 records of the last good run it compared before it stopped, of the 200 it would have:
+    ...
+    value: 29 compared, 6 changed, 0 emptied (volatile: up to 20 of 200 may change, none may become empty): tolerated 6
+  records: found 29 of the last good run's 200 before it stopped: not judged
 ```
 
 The new version's note says which checks it was forced past.

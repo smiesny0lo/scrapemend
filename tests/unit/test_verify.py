@@ -424,6 +424,77 @@ def test_a_sample_reads_every_value_of_a_field_with_few_values() -> None:
     ]
 
 
+def test_a_report_says_what_each_field_changed_and_what_the_rules_tolerated() -> None:
+    # A passing report used to read the same whether nothing changed or 5 of 50 prices
+    # did: a human promoting it couldn't see what the allowances let through.
+    prices = price_reads(DETAILS, {i: f"9{i}" for i in range(20, 25)})
+    report = run(spec(), FakePages(prices, listing_for(URLS)))
+    assert report.accepted, report.problems
+    assert report.evidence() == [
+        "fields, on the 50 records of the last good run it compared:",
+        "  title: 50 compared, 0 changed, 0 emptied (stable: none may differ): none",
+        "  city: 50 compared, 0 changed, 0 emptied (stable: none may differ): none",
+        "  price: 50 compared, 5 changed, 0 emptied (volatile: up to 5 may change, none may "
+        "become empty): tolerated 5",
+        "records: found 50 of the last good run's 50 (at least 45 needed)",
+        "judged on their own: the 10 largest and the 10 smallest values of price",
+    ]
+    unchanged = run(spec())
+    assert unchanged.evidence()[3] == (
+        "  price: 50 compared, 0 changed, 0 emptied (volatile: up to 5 may change, none may "
+        "become empty): none"
+    )
+
+
+def test_a_report_says_which_records_got_only_the_lighter_checks() -> None:
+    # Records the last good run didn't have are checked for required fields and known
+    # values only. Review attack B2 was wrong on exactly those, and the report said
+    # nothing about them.
+    new = f"{BASE}/d/99"
+    details = DETAILS | {new: detail("Title 99", "City 3", "99")}
+    gone = {k: v for k, v in KNOWN.items() if k != f"{BASE}/d/49"}
+    report = run(spec(), FakePages(details, listing_for([*URLS, new])), known=gone)
+    assert report.accepted, report.problems
+    evidence = report.evidence()
+    assert "records: found 49 of the last good run's 49 (at least 45 needed)" in evidence
+    assert (
+        "new: 2 records the last good run didn't have: only their required fields, and "
+        "fields with a small set of values, were checked"
+    ) in evidence
+
+
+def test_a_report_without_a_shadow_run_shows_the_anchors_field_by_field() -> None:
+    report = run(spec(city={"strategies": [{"css": "h1"}]}))
+    assert report.shadow is None
+    assert report.evidence()[:3] == [
+        "fields, on the 10 anchor pages it compared:",
+        "  title: 10 compared, 0 changed, 0 emptied (stable: all 10 must match): none",
+        "  city: 10 compared, 10 changed, 0 emptied (stable: all 10 must match): too few match",
+    ]
+    assert report.evidence()[3] == (
+        "  price: 10 compared, 0 changed, 0 emptied (volatile: 6 of 10 must match): none"
+    )
+
+
+def test_a_report_of_a_shadow_run_that_stopped_shows_what_it_compared() -> None:
+    # What `promote --force` is shown: the crawl stopped at page 45, which can't be
+    # fetched, after price changed on 5 of the 45 records it compared (11%). The rules
+    # can't fail it, since the 5 not compared might have matched; a human can.
+    unreachable = list(DETAILS)[45]
+    prices = price_reads(DETAILS, {i: f"9{i}" for i in range(20, 25)})
+    report = run(spec(), FakePages(prices, listing_for(URLS), unreachable={unreachable}))
+    assert report.verdict == "not run"
+    assert report.evidence() == [
+        "fields, on the 45 records of the last good run it compared before it stopped, of "
+        "the 50 it would have:",
+        "  title: 45 compared, 0 changed, 0 emptied (stable: none may differ): none",
+        "  city: 45 compared, 0 changed, 0 emptied (stable: none may differ): none",
+        "  price: 45 compared, 5 changed, 0 emptied (volatile: up to 5 of 50 may change, none "
+        "may become empty): tolerated 5",
+        "records: found 45 of the last good run's 50 before it stopped: not judged",
+    ]
+
+
 def test_volatile_change_is_configurable() -> None:
     prices = {
         u: new_price(html) if 20 <= i < 26 else html for i, (u, html) in enumerate(DETAILS.items())

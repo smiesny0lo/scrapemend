@@ -33,6 +33,7 @@ From the second review, of the shadow-run gate: wrong in ways the shadow run use
 |---|---|---|
 | `v2-value-misreads-over-2m.yaml` | B1 | `value` loses the millions from EUR 2M up: 5 of 200, the 5 largest |
 | `v3-value-misreads-over-2m.yaml` | B7 | the same, on layout v3 |
+| `v2-deadline-year-2026.yaml` | B2 | `deadline` reads the publication date on notices published since the last good run: the gate can't catch it |
 | `v2-container-skips-undisclosed.yaml` | B4c | the item container skips the 9 notices whose value is "Not disclosed" |
 | `v2-next-stops-at-page-10.yaml` | B6 | the next-page link stops at page 10: on 1200 notices, 1020 never read again |
 

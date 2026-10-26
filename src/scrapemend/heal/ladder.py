@@ -267,6 +267,7 @@ def promote(
     *,
     force: bool = False,
     on_shadow: Callable[[ShadowPlan], None] | None = None,
+    on_verified: Callable[[VerificationReport], None] | None = None,
     provisional: bool = False,
 ) -> SpecVersion:
     """Verify a proposal again and store it as the new active spec version.
@@ -277,7 +278,8 @@ def promote(
     when a check couldn't run, never when one failed, and applies a proposal made
     for an older version than the active one to the active version, verified like
     that. The patch is applied to a stored version, so a runtime override (like
-    --start) never leaks into the stored spec. `provisional`: promoted automatically,
+    --start) never leaks into the stored spec. `on_verified` is shown the new
+    report before anything is decided or stored. `provisional`: promoted automatically,
     so no human has looked at it (see scrapemend.runner.confirm); a promotion by hand
     is confirmed by that human.
     """
@@ -311,6 +313,8 @@ def promote(
         on_shadow=on_shadow,
     )
     state.proposals.reverified(proposal.id, report)
+    if on_verified is not None:
+        on_verified(report)
     if report.verdict == "failed":
         raise PromotionRefused(
             f"proposal {proposal.id} no longer passes verification: "
