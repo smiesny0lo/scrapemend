@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from scrapemend.detect.classify import Status
 from scrapemend.events import Event, EventKind, Notifier
-from scrapemend.fetch import Fetcher
+from scrapemend.fetch import Fetcher, Requests
 from scrapemend.heal.anchors import Anchor, split
 from scrapemend.heal.context import RepairContext, examples, prune_document, spec_yaml
 from scrapemend.heal.pages import Pages, PageSource
@@ -62,6 +62,7 @@ class HealOutcome(BaseModel):
     run_id: str | None = None
     proposals: list[Proposal] = Field(default_factory=list)
     version: int | None = None  # the newly active version, when promoted
+    requests: Requests | None = None  # what healing sent, if the fetcher counts
 
 
 def heal(
@@ -83,6 +84,27 @@ def heal(
     `mode` defaults to the spec's heal.mode, with "off" treated as "propose".
     `on_shadow` is told what each shadow run will read, before it starts.
     """
+    sent = Requests.of(fetcher)
+    outcome = _heal(
+        spec, state, snapshots, fetcher, provider,
+        run_id=run_id, mode=mode, attempts=attempts, notifier=notifier, on_shadow=on_shadow,
+    )  # fmt: skip
+    return outcome.model_copy(update={"requests": Requests.since(fetcher, sent)})
+
+
+def _heal(
+    spec: SourceSpec,
+    state: State,
+    snapshots: SnapshotStore,
+    fetcher: Fetcher,
+    provider: RepairProvider,
+    *,
+    run_id: str | None,
+    mode: Literal["propose", "auto"] | None,
+    attempts: int,
+    notifier: Notifier | None,
+    on_shadow: Callable[[ShadowPlan], None] | None,
+) -> HealOutcome:
     failed = state.runs.get(run_id) if run_id else state.runs.latest(spec.id)
     if failed is None or failed.source_id != spec.id:
         return _skip(spec, "no failed run to repair")

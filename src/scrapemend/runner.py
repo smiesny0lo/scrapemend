@@ -10,7 +10,7 @@ from scrapemend.detect.fingerprint import similarity
 from scrapemend.events import Event, EventKind, Notifier
 from scrapemend.extract import FieldResult
 from scrapemend.extract.select import find_link
-from scrapemend.fetch import Fetcher, FetchError
+from scrapemend.fetch import Fetcher, FetchError, Requests
 from scrapemend.heal.anchors import Anchor, AnchorPicker, encode
 from scrapemend.pipeline import RunAborted, RunSummary, SourceRun, ValidatedRecord
 from scrapemend.retention import prune
@@ -48,6 +48,7 @@ def run_source(
     """
     runs = state.runs
     started = datetime.now(UTC)
+    sent = Requests.of(fetcher)
     previous = runs.latest(spec.id)
     baseline_report = runs.last_good(spec.id)
     baseline = baseline_report.summary if baseline_report else None
@@ -117,6 +118,7 @@ def run_source(
         structure=structure,
         diagnosis=diagnosis,
         error=str(error) if error else None,
+        requests=Requests.since(fetcher, sent),
     )
     runs.save(report)
     if complete and report.status == "ok":

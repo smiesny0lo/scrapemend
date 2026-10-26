@@ -19,7 +19,7 @@ from scrapemend.detect.classify import Status
 from scrapemend.events import Notifier, Notifiers, make_notifier
 from scrapemend.extract import Extractor
 from scrapemend.extract.strategies import UnknownStrategy
-from scrapemend.fetch import DEFAULT_USER_AGENT, HttpFetcher
+from scrapemend.fetch import DEFAULT_USER_AGENT, HttpFetcher, Requests
 from scrapemend.heal.context import spec_yaml
 from scrapemend.heal.ladder import (
     HealOutcome,
@@ -193,7 +193,7 @@ def run(
                 limit=limit,
                 notifier=_notifier(notify),
                 rebase=lambda s: _with_start(s, start),
-                on_run=lambda report: _print_report(report, fetcher, snapshots),
+                on_run=lambda report: _print_report(report, snapshots),
                 on_heal=_print_heal,
                 on_shadow=_print_plan("heal"),
             )
@@ -223,7 +223,7 @@ def check(
         report = run_source(
             source, fetcher, store, state, mode="check", limit=sample, notifier=_notifier(notify)
         )
-        _print_report(report, fetcher, snapshots)
+        _print_report(report, snapshots)
     raise typer.Exit(EXIT_CODES[report.status])
 
 
@@ -661,6 +661,8 @@ def _print_heal(outcome: HealOutcome) -> None:
         typer.echo(line, err=True)
 
     err(f"heal: {outcome.status}: {outcome.message}")
+    if outcome.requests is not None:
+        err(f"  {_requests(outcome.requests)}")
     for p in outcome.proposals:
         confidence = f"confidence {p.patch.confidence:.2f}"
         err(f"  proposal {p.id} ({p.provider}, {confidence}): {p.report.verdict}")
@@ -672,7 +674,11 @@ def _print_heal(outcome: HealOutcome) -> None:
                 err(f"      problem: {problem}")
 
 
-def _print_report(report: RunReport, fetcher: HttpFetcher, snapshots: Path) -> None:
+def _requests(sent: Requests) -> str:
+    return f"requests: {sent.sent} ({sent.retried} retried)"
+
+
+def _print_report(report: RunReport, snapshots: Path) -> None:
     def err(line: str) -> None:
         typer.echo(line, err=True)
 
@@ -688,7 +694,8 @@ def _print_report(report: RunReport, fetcher: HttpFetcher, snapshots: Path) -> N
         f"{summary.valid_records} records, {summary.invalid_records} invalid, "
         f"{len(summary.failures)} failed"
     )
-    err(f"  requests: {fetcher.requests} ({fetcher.retries} retried)")
+    if report.requests is not None:  # this run's own: not the heal's, nor another run's
+        err(f"  {_requests(report.requests)}")
     if summary.fallbacks:
         err(f"  fallback strategies used: {per_field(summary.fallbacks)}")
     if summary.empty:

@@ -25,7 +25,7 @@ from examples.mutating_site.chaos import Chaos, parse_modes
 from examples.mutating_site.records import generate_notices
 from scrapemend.cli import app as cli
 from scrapemend.events import Event
-from scrapemend.fetch import HttpFetcher, Response, TransientError
+from scrapemend.fetch import HttpFetcher, Requests, Response, TransientError
 from scrapemend.heal import ladder
 from scrapemend.heal import verify as verification
 from scrapemend.heal.context import RepairContext
@@ -982,6 +982,43 @@ def test_cli_prune(world: World) -> None:
         "  nothing to delete",
         f"  kept          {good}: the last good run",
     ]
+
+
+def requests(output: str) -> list[str]:
+    return [line.strip() for line in output.splitlines() if line.strip().startswith("requests:")]
+
+
+def test_cli_reports_the_requests_of_each_step_on_its_own(world: World, tmp_path: Path) -> None:
+    # One fetcher serves the run, the heal and the run after it; each used to report
+    # the fetcher's total so far, so a run's line counted the heal's requests too.
+    world.state.specs.register(file_spec(mode="auto", version=2))
+    world.layout(2)
+    repair = ["--patch", str(REPAIRS / "demo-v2.yaml")]
+    ran = cli_run(world, "run", "--out", str(tmp_path / "out.jsonl"), *repair)
+    assert ran.exit_code == 0, ran.output
+    assert "heal: promoted" in ran.output
+    assert requests(ran.output) == [
+        "requests: 5 (0 retried)",  # robots.txt, listing page 1, 3 probed detail pages
+        "requests: 206 (0 retried)",  # the heal: quick checks and shadow run, then promote's
+        "requests: 210 (0 retried)",  # the run on v3: 10 listing and 200 detail pages
+    ]
+    second, first = world.state.runs.recent("tenders-demo", limit=2)
+    assert (first.requests, second.requests) == (
+        Requests(sent=5, retried=0),
+        Requests(sent=210, retried=0),
+    )
+
+
+def test_heal_reports_its_own_requests(world: World) -> None:
+    world.layout(2)
+    world.run()
+    outcome = world.heal(PatchProvider(load_patch(REPAIRS / "demo-v2.yaml")))
+    assert outcome.requests == Requests(sent=1 + 206, retried=0)  # its own robots.txt
+    # Again, on the pages the first heal stored: not even robots.txt is needed.
+    healed = cli_run(world, "heal", "--patch", str(REPAIRS / "demo-v2.yaml"))
+    assert healed.exit_code == 0, healed.output
+    assert "heal: proposed: proposal 2" in healed.output
+    assert requests(healed.output) == ["requests: 0 (0 retried)"]
 
 
 def test_cli_promote_verifies_the_proposal_again(world: World) -> None:

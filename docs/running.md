@@ -50,6 +50,8 @@ Every run is compared with the **last good run**: the latest complete run whose 
 
 Exit code 1 means a usage or spec error. A quarantined source also exits with 3 until it's repaired.
 
+Each report says how many HTTP requests that run sent, retries and robots.txt included (`requests: 211 (0 retried)`). When a run heals, the heal reports its own requests (mostly the shadow run's), and so does the run after a promotion: no line counts another step's.
+
 **Naming the broken fields.** When the item container finds nothing, scrapemend re-checks three detail pages it already knows (anchors) to name the broken fields:
 
 ```

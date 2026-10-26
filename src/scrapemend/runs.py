@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import AwareDatetime, BaseModel, Field
 
 from scrapemend.detect.classify import Diagnosis, Failure, Status
+from scrapemend.fetch import Requests
 from scrapemend.ids import new_run_id
 from scrapemend.pipeline import RunSummary
 
@@ -33,6 +34,7 @@ class RunReport(BaseModel):
     error: str | None = None  # why the crawl stopped early, if it did
     accepted_at: AwareDatetime | None = None  # a drift run a human made the baseline
     pruned: list[str] = Field(default_factory=list)  # older runs whose snapshots it deleted
+    requests: Requests | None = None  # what this run sent, if its fetcher counts
 
     @property
     def good(self) -> bool:
