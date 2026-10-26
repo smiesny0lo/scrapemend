@@ -25,7 +25,7 @@ from scrapemend.heal.verify import VerificationReport, verify
 from scrapemend.pipeline import RunSummary, ValidatedRecord
 from scrapemend.runner import run_source
 from scrapemend.snapshots import FilesystemSnapshotStore
-from scrapemend.spec import CssSpec, SourceSpec, load_patch, load_spec
+from scrapemend.spec import CssSpec, SourceSpec, XPathSpec, load_patch, load_spec
 from scrapemend.spec.patch import FieldPatch, SpecPatch
 from scrapemend.state import State
 from tests.support import FakeClock, serve
@@ -487,6 +487,41 @@ def test_a_sample_reads_the_largest_and_smallest_values_of_every_number_field(
     report = big.check(load_patch(BAD / "v2-value-misreads-over-2m.yaml"))
     [problem] = report.problems
     assert problem.startswith("value changed on 10 of the 10 records where it was largest"), problem
+
+
+UNDISCLOSED = sum(n.value is None for n in NOTICES.values())  # "Not disclosed": 9 of 200
+
+
+def skips_undisclosed(b: Broken) -> SpecPatch:
+    """Review attack B4c: the correct repair, except that the item container only
+    matches items with an amount in euros."""
+    if layout(b) == 2:
+        return load_patch(BAD / "v2-container-skips-undisclosed.yaml")
+    cards = "//div[contains(@class, 'grid')]/div[contains(@class, 'rounded-lg')]"
+    container = XPathSpec(xpath=f"{cards}[contains(., '€')]")
+    return load_patch(REPAIRS / "demo-v3.yaml").model_copy(update={"container": container})
+
+
+def test_the_shadow_run_must_find_every_kind_of_record(broken: Broken) -> None:
+    # Review attack B4c: the item container skips every notice whose value is "Not
+    # disclosed". 191 of 200 found is within the 10% the shadow run may miss, so it
+    # passed, and the 9 were never read again.
+    report = broken.check(skips_undisclosed(broken))
+    assert report.shadow is not None and report.shadow.compared == 200 - UNDISCLOSED
+    assert report.problems == [
+        f"the shadow run found 0 of the {UNDISCLOSED} records of the last good run whose "
+        f"value was empty (needs 90%), against {200 - UNDISCLOSED} of the other "
+        f"{200 - UNDISCLOSED}: the item container, the detail links or the pagination miss "
+        "that kind of record"
+    ]
+
+
+def test_a_sample_must_find_every_kind_of_record(big: Broken) -> None:
+    # B4c on 1200 notices: a sample judges it on every listing page's links.
+    report = big.check(load_patch(BAD / "v2-container-skips-undisclosed.yaml"))
+    [problem] = report.problems
+    assert problem.startswith("the shadow run found 0 of the "), problem
+    assert "records of the last good run whose value was empty" in problem
 
 
 def test_unloadable_anchor_pages_are_tolerated(broken: Broken) -> None:

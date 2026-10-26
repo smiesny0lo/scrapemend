@@ -55,6 +55,11 @@ If a quick check fails, the shadow run is skipped: the repair is rejected anyway
 The candidate crawls the source as a run would: every listing page along **its** next-page link (up to `fetch.paginate.max_pages`), every item its container matches, every detail page its follow link points to (on a large source, a sample of them: see below). Then its records are compared with the last good run's, by key:
 
 - **Coverage.** It must find at least **`heal.shadow_min_found`** (default **90%**) of the records the last good run had. A container that misses items, a follow link that reads the wrong link, or pagination that stops early fails here. A source that loses records by itself may need less: see [sources that churn](#sources-that-churn).
+- **Coverage of every kind of record.** It must find that share of each kind of record too: of the records where a field was empty, and of the records of each value of a field with a small set of values. A container that skips one kind of item skips all of them, in every run. A kind that falls short counts only if chance can't explain it: if it would happen less than once in a thousand times, were each record as likely to be gone as the source's records overall. One of three Cleaning notices gone, where a tenth of all notices are, is churn. None of the 9 notices without an amount found, where every other notice was, is not:
+
+  ```
+  problem: the shadow run found 0 of the 9 records of the last good run whose value was empty (needs 90%), against 191 of the other 191: the item container, the detail links or the pagination miss that kind of record
+  ```
 - **Stable fields** must be **identical** on every record both runs have (on `heal.threshold` of them: by default all).
 - **Volatile fields** may have changed on at most **`heal.volatile_change`** (default 10%) of those records. A value that became empty is never a change: it is a mismatch, judged like a stable field's, so by default none may.
 - On records the last good run didn't have, **required fields** must be filled. A field with a small set of values must mostly read values from that set.
@@ -84,7 +89,7 @@ problem: the shadow run found 172 of the last good run's 200 records (needs 90%)
 
 Such a source may lower **`heal.shadow_min_found`**. Pick a share below what survives the longest gap you expect between a good run and a heal: a source that loses 5% of its records a day keeps about 86% over three days (0.95³), so 0.8 leaves room. Measure the churn from two good runs' records rather than guessing.
 
-The price is what a lower share lets through: a repair that misses that many records (a container that misses one kind of item, pagination that stops early) passes coverage too. Records the shadow run doesn't find are never compared, so the rules for the others don't change, and `expect.min_items_per_run` still judges every run after the promotion.
+The price is what a lower share lets through: a repair that misses that many records (pagination that stops early) passes coverage too. One that misses one kind of record still fails, unless that kind loses no more than chance would take. Records the shadow run doesn't find are never compared, so the rules for the others don't change, and `expect.min_items_per_run` still judges every run after the promotion.
 
 ### Fail closed
 
@@ -172,7 +177,8 @@ The same checks run whether the repair is promoted by `scrapemend promote` or au
 ## What it can't catch
 
 - **Records the last good run didn't have.** Only their required fields and small value sets are checked. A plausible but wrong value on a new record passes.
-- **Records the shadow run didn't find.** Up to 10% of the last good run's records (1 − `heal.shadow_min_found`) may be missing (removed from the site, or missed by the repair), and those aren't compared.
+- **Records the shadow run didn't find.** Up to 10% of the last good run's records (1 − `heal.shadow_min_found`) may be missing (removed from the site, or missed by the repair), and those aren't compared, as long as no kind of record is missing more than chance explains. Missing records that are of no kind the gate knows (the last page of the listing, the oldest notices) can make up the whole 10%.
+- **Kinds of record in a sample of a spec keyed by a field.** A sample judges each kind's coverage by the links on the listing pages, which are the records' keys only with `key: url`. With another key, only the share of all items found is judged; `shadow_max_items: all` judges every kind.
 - **Volatile fields wrong on a few records.** Up to 10% may read another value, because prices and statuses do change. A volatile field that is wrong on fewer than 10% of records, without becoming empty, passes.
 - **A sample, for a source with more records than `heal.shadow_max_items` (default 500).** Every listing page is read, so the item container and the pagination are judged on the whole source, but only the records drawn are compared. A stable field wrong on a share *p* of records is caught with probability 1 − (1 − *p*)ⁿ for *n* records drawn. With the default 500, a field wrong on 1% of records is caught 99.3% of the time, on 0.5% about 92%, and on 0.1% only about 39%; the last-word location (12 of 200) with 50 records drawn, about 95% of the time. A volatile field's changed share is estimated from the sample. Set `all` where a field wrong on a few records matters more than the requests.
 - **Changes after the verification.** `promote` verifies again on the pages `heal` stored, not on the site as it is now. A redesign in between isn't seen until the next run.

@@ -35,21 +35,27 @@ same verdict can be reached again from the stored pages. Its records are compare
 with the last good run's, by key:
 
 - the shadow run must find heal.shadow_min_found (90%) of the last good run's
-  records;
+  records, and of each kind of record (the records where a field was empty, those
+  of each value of a field with a small set of values), unless chance explains
+  what one kind is missing;
 - on every record both runs have, a stable field must be identical (on
   heal.threshold of them: by default all);
 - a volatile field may have changed on at most heal.volatile_change of them, and a
   value that became empty is never a change: it is a mismatch, judged like a
   stable field's;
 - a field with a small set of values must mostly read values from that set, and
-  required fields must be filled on records the last good run didn't have.
+  required fields must be filled on records the last good run didn't have;
+- a number field must follow the same rules on its 10 largest and 10 smallest
+  values of the last good run, unless chance explains the difference: a pattern
+  too narrow for long or short numbers misreads exactly those.
 
 When the last good run had more records than heal.shadow_max_items (500 unless
 it is `all`), the shadow run still reads every listing page along the candidate's
 next-page link, and must find heal.shadow_min_found of the last good run's items
-there, but only a sample of their detail pages: drawn at random, with a fixed seed,
-from the items of every page. Before it starts, it says what it will read and about
-how many requests that takes (`on_shadow`).
+there, but only a sample of their detail pages: the records the rules judge on
+their own (the extremes of each number field, a record of every kind), then others
+at random, with a fixed seed, from the items of every page. Before it starts, it
+says what it will read and about how many requests that takes (`on_shadow`).
 
 Every check ends passed, failed or not run, with the reason. A candidate is accepted
 only if every check passed. One that failed a check is rejected. One where a check
@@ -727,6 +733,7 @@ def _shadow(
 
     problems = crawl.problems
     min_found = spec.heal.shadow_min_found
+    before = len(problems)
     if sampled:
         # Every listing page was read: their items are what a run would find.
         had = baseline.items if baseline is not None else 0
@@ -748,11 +755,46 @@ def _shadow(
             f"(needs {min_found:.0%}): the item container, the detail links or the "
             "pagination miss some"
         )
+    if len(problems) == before:  # most records were found: most of every kind must be
+        if not sampled:
+            problems += _kind_problems(spec, known, baseline, set(comparison.compared), min_found)
+        elif spec.item.key == "url":  # the links on the listing pages are the keys
+            listed = crawl.listed & known.keys()
+            problems += _kind_problems(spec, known, baseline, listed, min_found)
     problems += comparison.problems(threshold, spec.heal.volatile_change)
     needed = min(MIN_SHADOW_RECORDS, len(known))
     if not problems and run.compared < needed:
         return run, [], f"only {run.compared} records can be compared (needs {needed})"
     return run, problems, None
+
+
+def _kind_problems(
+    spec: SourceSpec,
+    known: KnownRecords,
+    baseline: RunSummary | None,
+    found: set[str],
+    min_found: float,
+) -> list[str]:
+    """The kinds of record (_kinds) of which the shadow run found fewer than
+    `min_found` of the last good run's, where chance can't explain it: a container,
+    a link or a pagination that misses one kind of record misses every one of them,
+    in every run. `found`: the keys of the last good run's records it found."""
+    missing = (len(known) - len(found)) / len(known)
+    problems = []
+    for (name, value), members in _kinds(spec, known, baseline, known).items():
+        got = sum(key in found for key in members)
+        if got >= min_found * len(members):
+            continue
+        if not _improbable(len(members) - got, len(members), missing):
+            continue  # as many gone as anywhere else, like a source that churns
+        what = "was empty" if value is None else f"was {value!r}"
+        problems.append(
+            f"the shadow run found {got} of the {len(members)} records of the last good run "
+            f"whose {name} {what} (needs {min_found:.0%}), against {len(found) - got} of the "
+            f"other {len(known) - len(members)}: the item container, the detail links or the "
+            "pagination miss that kind of record"
+        )
+    return problems
 
 
 def _plan(
@@ -872,16 +914,17 @@ def _number(value: AnchorValue) -> Decimal | None:
 def _kinds(
     spec: SourceSpec, known: KnownRecords, baseline: RunSummary | None, keys: Iterable[str]
 ) -> dict[tuple[str, AnchorValue], list[str]]:
-    """The kinds of record among `keys` (the last good run's): for each field that took
-    only a few values in the last good run (a status, a category), the records of
-    each of its values, empty included. (field, value) -> their keys, in that order."""
+    """The kinds of record among `keys` (the last good run's): the records where a field
+    was empty in the last good run, and, for each field that took only a few values
+    then (a status, a category), the records of each of its values. (field, value, or
+    None for empty) -> their keys, in that order."""
     stats = baseline.fields if baseline is not None else {}
-    few = [n for n in spec.fields if n in stats and stats[n].known_values is not None]
+    few = {n for n in spec.fields if n in stats and stats[n].known_values is not None}
     kinds: dict[tuple[str, AnchorValue], list[str]] = {}
     for key in keys:
         values = known[key]
-        for name in few:
-            if name in values:
+        for name in spec.fields:
+            if name in values and (values[name] is None or name in few):
                 kinds.setdefault((name, values[name]), []).append(key)
     return kinds
 
@@ -916,6 +959,7 @@ class _Crawl:
         self.run = run
         self.problems: list[str] = []
         self.unavailable: str | None = None
+        self.listed: set[str] = set()  # in a sample: the keys of every listing page's items
         self._links: set[str] = set()
 
     def all(self, first: Document) -> Iterator[tuple[str, RecordResult]]:
@@ -934,6 +978,7 @@ class _Crawl:
                     pool.setdefault(key, item)
         if self.unavailable is not None:
             return
+        self.listed = set(pool)
         chosen = _choose(self.spec, pool, known, baseline, cap)
         self.run.drawn = len(chosen)
         for key in chosen:

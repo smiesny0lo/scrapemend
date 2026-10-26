@@ -476,6 +476,54 @@ def test_the_shadow_run_must_find_the_last_good_runs_records() -> None:
     assert run(spec(), pages, known={k: v for k, v in KNOWN.items() if k in pages.details}).accepted
 
 
+def listing_without(gone: set[int]) -> tuple[str, dict[str, str]]:
+    """The first listing page and MORE, without the items numbered in `gone`."""
+
+    def keep(urls: list[str]) -> list[str]:
+        return [u for u in urls if int(u.rsplit("/", 1)[1]) not in gone]
+
+    more = {
+        f"{BASE}/list?page=2": listing_for(keep(MORE_URLS[:10]), "?page=3"),
+        f"{BASE}/list?page=3": listing_for(keep(MORE_URLS[10:20]), None),
+    }
+    return listing_for(keep(URLS)), more
+
+
+def test_the_shadow_run_must_find_every_kind_of_record() -> None:
+    # Review attack B4c's shape: the item container skips every record whose price is
+    # empty ("Not disclosed"). 45 of 50 records found is the 90% it must find, but
+    # they are all of one kind: 0 of 5, where the others were all found.
+    undisclosed = set(range(40, 45))
+    details = {
+        u: detail(f"Title {i}", f"City {i % 4}", None) if i in undisclosed else html
+        for i, (u, html) in enumerate(DETAILS.items())
+    }
+    known = {
+        k: v | {"price": None} if int(k.rsplit("/", 1)[1]) in undisclosed else v
+        for k, v in KNOWN.items()
+    }
+    first, more = listing_without(undisclosed)
+    report = run(spec(), FakePages(details, first, more), known=known)
+    assert report.shadow is not None and report.shadow.compared == 45
+    assert report.problems == [
+        "the shadow run found 0 of the 5 records of the last good run whose price was empty "
+        "(needs 90%), against 45 of the other 45: the item container, the detail links or "
+        "the pagination miss that kind of record"
+    ]
+
+
+def test_records_of_one_kind_that_chance_took_are_fine() -> None:
+    # 5 of 50 records gone, as a source that churns loses them: 2 of the 13 in City 1
+    # (85%), which happens more than one time in three when one record in ten is gone.
+    cities = FieldStats(filled=50, domain=[f"City {i}" for i in range(4)])
+    baseline = BASELINE.model_copy(update={"fields": {"city": cities}})
+    gone = {3, 17, 22, 36, 41}
+    first, more = listing_without(gone)
+    report = run(spec(), FakePages(DETAILS, first, more), baseline=baseline)
+    assert report.accepted, report.problems
+    assert report.shadow is not None and report.shadow.compared == 45
+
+
 def found(min_found: float, cap: int | str = 500) -> SourceSpec:
     data = spec().model_dump(mode="json")
     data["heal"] |= {"shadow_min_found": min_found, "shadow_max_items": cap}
