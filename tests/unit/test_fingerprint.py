@@ -58,32 +58,42 @@ def test_similarity_rejects_garbage() -> None:
 
 
 @pytest.fixture(scope="module")
-def demo() -> dict[tuple[int, str], list[str]]:
-    prints: dict[tuple[int, str], list[str]] = {}
+def demo() -> dict[tuple[int, str], list[Document]]:
+    pages: dict[tuple[int, str], list[Document]] = {}
     for layout in (1, 2, 3):
         client = TestClient(create_app(layout=layout))
-        prints[(layout, "listing")] = [
-            fp(client.get(f"/notices?page={n}").text) for n in (1, 5, 10)
+        pages[(layout, "listing")] = [
+            Document.parse(client.get(f"/notices?page={n}").text) for n in (1, 5, 10)
         ]
-        prints[(layout, "detail")] = [
-            fp(client.get(f"/notices/TN-2026-{n:04d}").text) for n in (1, 27, 150)
+        pages[(layout, "detail")] = [
+            Document.parse(client.get(f"/notices/TN-2026-{n:04d}").text) for n in (1, 27, 150)
         ]
-    return prints
+    return pages
+
+
+def shared(a: Document, b: Document) -> float:
+    """The exact share of features two pages have in common, which similarity estimates."""
+    fa, fb = features(a), features(b)
+    return len(fa & fb) / len(fa | fb)
 
 
 @pytest.mark.parametrize("kind", ["listing", "detail"])
 @pytest.mark.parametrize("layout", [1, 2, 3])
 def test_same_layout_is_recognised(
-    demo: dict[tuple[int, str], list[str]], layout: int, kind: str
+    demo: dict[tuple[int, str], list[Document]], layout: int, kind: str
 ) -> None:
     first, *others = demo[(layout, kind)]
     for other in others:
-        assert similarity(first, other) >= 0.85
+        assert shared(first, other) >= 0.85
+        # A 64-value signature estimates that share give or take about 0.1 (the first
+        # listing page, without a link back, shares 87% with the last one): still well
+        # clear of CHANGED_BELOW.
+        assert similarity(fingerprint(first), fingerprint(other)) >= CHANGED_BELOW + 0.15
 
 
 @pytest.mark.parametrize("kind", ["listing", "detail"])
 @pytest.mark.parametrize(("a", "b"), [(1, 2), (1, 3), (2, 3)])
 def test_redesigns_are_detected(
-    demo: dict[tuple[int, str], list[str]], a: int, b: int, kind: str
+    demo: dict[tuple[int, str], list[Document]], a: int, b: int, kind: str
 ) -> None:
-    assert similarity(demo[(a, kind)][0], demo[(b, kind)][0]) < 0.3
+    assert similarity(fingerprint(demo[(a, kind)][0]), fingerprint(demo[(b, kind)][0])) < 0.3
