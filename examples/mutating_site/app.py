@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from fastapi.templating import Jinja2Templates
 
 from .chaos import DEFAULT_FAILURE_RATE, Chaos, parse_modes
-from .records import format_date, format_money, generate_notices
+from .records import Notice, format_date, format_money, generate_notices
 
 LAYOUTS = (1, 2, 3)
 PAGE_SIZE = 20
@@ -41,9 +41,11 @@ def create_app(
     layout: int | None = None,
     chaos: str | None = None,
     failure_rate: float | None = None,
+    notices: list[Notice] | None = None,
 ) -> FastAPI:
     """Build the site. Unset arguments fall back to the LAYOUT, CHAOS and
-    CHAOS_FAILURE_RATE env vars, then to layout 1 with no chaos."""
+    CHAOS_FAILURE_RATE env vars, then to layout 1 with no chaos. `notices`
+    replaces the 200 generated ones, e.g. to try a larger source."""
     if layout is None:
         layout = int(os.environ.get("LAYOUT", "1"))
     if chaos is None:
@@ -55,7 +57,9 @@ def create_app(
     app.state.layout = _check_layout(layout)
     app.state.chaos = Chaos(parse_modes(chaos), failure_rate)
 
-    notices = sorted(generate_notices(), key=lambda n: (n.published, n.id), reverse=True)
+    if notices is None:
+        notices = generate_notices()
+    notices = sorted(notices, key=lambda n: (n.published, n.id), reverse=True)
     by_id = {n.id: n for n in notices}
     pages = math.ceil(len(notices) / PAGE_SIZE)
 

@@ -458,20 +458,17 @@ def test_a_sample_from_a_source_with_new_records_may_need_fewer_of_them_known() 
     ]
 
 
-def test_a_sample_of_listing_pages_holding_fewer_items_may_be_allowed() -> None:
-    # Listing page 2 now lists 3 notices where the last good run saw 10: the item
-    # container finds 43 of 50 items on the pages drawn.
-    first = f"{BASE}/list"
-    more = MORE | {
-        first: listing_for(URLS),
-        f"{BASE}/list?page=2": listing_for(MORE_URLS[:3], "?page=3"),
-    }
+def test_a_sample_of_a_listing_that_lost_items_may_be_allowed() -> None:
+    # Replaces test_a_sample_of_listing_pages_holding_fewer_items_may_be_allowed, which
+    # counted the items of the listing pages a sample drew: now it reads them all.
+    # Listing page 2 now lists 3 notices where the last good run saw 10: 43 of 50 items.
+    more = MORE | {f"{BASE}/list?page=2": listing_for(MORE_URLS[:3], "?page=3")}
     pages = FakePages(DETAILS, listing_for(URLS), more)
     assert run(found(0.85, cap=30), pages, baseline=LISTINGS).accepted
     pages = FakePages(DETAILS, listing_for(URLS), more)
     assert run(found(0.9, cap=30), pages, baseline=LISTINGS).problems == [
-        "the item container finds 43 items on 3 sampled listing pages, where the last good "
-        "run found 50 (needs 90%)"
+        "the shadow run found 43 items on 3 listing pages, where the last good run found 50 "
+        "(needs 90%): the item container or the pagination miss some"
     ]
 
 
@@ -566,19 +563,71 @@ def test_too_few_comparable_records_stop_the_shadow_run() -> None:
     assert not_run(report) == {"shadow run": "only 19 records can be compared (needs 20)"}
 
 
-def test_a_sample_needs_the_last_good_runs_listing_pages() -> None:
-    sampled = spec().model_copy(update={"heal": HealSpec(shadow_max_items=20)})
-    report = run(sampled)  # BASELINE predates RunSummary.listings
-    assert not_run(report) == {
-        "shadow run": "the last good run's listing pages are not recorded, so none can be "
-        "drawn; set heal.shadow_max_items to all to read the whole source"
-    }
+def numbered(pages: int, per_page: int, link_ends: int | None = None) -> dict[str, str]:
+    """Listing pages 1 to `pages`, by URL, of `per_page` items each. From page
+    `link_ends` on, the link onwards is one the spec's selector (a.next) doesn't find,
+    as a pager whose links change past page 9 would."""
+    urls = [f"{BASE}/d/{i}" for i in range(pages * per_page)]
+    out = {}
+    for n in range(1, pages + 1):
+        listing = listing_for(urls[(n - 1) * per_page : n * per_page], None)
+        if n < pages:
+            kind = "more" if link_ends is not None and n >= link_ends else "next"
+            listing += f"<a class='{kind}' href='?page={n + 1}'>Next</a>"
+        out[f"{BASE}/list" + (f"?page={n}" if n > 1 else "")] = listing
+    return out
 
 
-# Every listing page of the source as the last good run recorded it, to sample from.
+def run_pages(
+    candidate: SourceSpec,
+    link_ends: int | None = None,
+    details: dict[str, str] | None = None,
+    **kwargs: Any,
+) -> tuple[Any, FakePages]:
+    """A source of 100 records on 10 listing pages, which the last good run read:
+    `details` are their detail pages now, the last good run's values by default."""
+    details = details or page_set(100)
+    listings = numbered(10, 10, link_ends)
+    pages = FakePages(details, listings[f"{BASE}/list"], listings)
+    urls = [f"{BASE}/d/{i}" for i in range(100)]
+    kwargs.setdefault("anchors", anchors_for(details, urls[::10]))  # one on each listing page
+    kwargs.setdefault("baseline", BASELINE.model_copy(update={"listing_pages": 10, "items": 100}))
+    kwargs.setdefault("known", {a.key: a.values for a in anchors_for(details, urls)})
+    return run(candidate, pages, **kwargs), pages
+
+
+def test_a_sampled_shadow_run_walks_every_listing_page() -> None:
+    # Replaces test_a_sample_needs_the_last_good_runs_listing_pages: a sample drew
+    # listing pages from the last good run's, by URL, so it never followed the
+    # candidate's next-page link. It walks the listing as a run would now, and samples
+    # only the detail pages, from the items of every listing page.
+    report, pages = run_pages(sampling(50))  # BASELINE predates RunSummary.listings
+    assert report.accepted, report.problems
+    shadow = report.shadow
+    assert (shadow.scope, shadow.listing_pages, shadow.items) == ("sample", 10, 100)
+    assert (shadow.drawn, shadow.records, shadow.compared) == (50, 50, 50)
+    assert pages.listings == [f"{BASE}/list?page={n}" for n in range(2, 11)]
+    drawn = pages.requested[-50:]  # after the anchors' and the sample's pages
+    assert {int(url.rsplit("/", 1)[1]) // 10 for url in drawn} == set(range(10))  # all pages
+
+
+def test_a_sampled_shadow_run_follows_the_next_page_link_to_its_end() -> None:
+    # Review attack B6: the next-page link works on the pages the quick checks follow,
+    # and stops at page 5 of 10. Half the source would never be read again.
+    report, pages = run_pages(sampling(20), link_ends=5)
+    assert report.problems == [
+        "the shadow run found 50 items on 5 listing pages, where the last good run found 100 "
+        "(needs 90%): the item container or the pagination miss some"
+    ]
+    assert report.shadow is not None and report.shadow.listing_pages == 5
+    assert pages.listings == [f"{BASE}/list?page={n}" for n in range(2, 6)]
+
+
+# Every listing page of the source as the last good run recorded it.
 LISTINGS = BASELINE.model_copy(
     update={
         "listing_pages": 3,
+        "items": 50,
         "listings": [
             ListingPage(url=f"{BASE}/list", items=30),
             ListingPage(url=f"{BASE}/list?page=2", items=10),

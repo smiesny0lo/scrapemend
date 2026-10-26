@@ -632,8 +632,8 @@ def _plan(plan: ShadowPlan) -> str:
         what = f"the whole source, all {plan.known} of the last good run's records"
     else:
         what = (
-            f"a sample of {plan.records} of the last good run's {plan.known} records, from "
-            f"{plan.listing_pages} listing pages drawn"
+            f"every listing page, and the detail pages of a sample of {plan.records} records "
+            f"(the last good run had {plan.known})"
         )
     if not plan.requests:
         return f"{what}: every page it reads is stored, so no requests"

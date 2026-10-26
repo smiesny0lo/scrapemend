@@ -45,10 +45,11 @@ with the last good run's, by key:
   required fields must be filled on records the last good run didn't have.
 
 When the last good run had more records than heal.shadow_max_items (500 unless
-it is `all`), the shadow run reads a sample instead: listing pages drawn at random
-(with a fixed seed) from the last good run's, the same pages' item counts
-compared, and records drawn at random from their items. Before it starts, it says
-what it will read and about how many requests that takes (`on_shadow`).
+it is `all`), the shadow run still reads every listing page along the candidate's
+next-page link, and must find heal.shadow_min_found of the last good run's items
+there, but only a sample of their detail pages: drawn at random, with a fixed seed,
+from the items of every page. Before it starts, it says what it will read and about
+how many requests that takes (`on_shadow`).
 
 Every check ends passed, failed or not run, with the reason. A candidate is accepted
 only if every check passed. One that failed a check is rejected. One where a check
@@ -57,8 +58,6 @@ unverified: fail closed. It is never promoted automatically, and only `promote
 --force` can promote it, never past a check that failed.
 """
 
-import math
-import random
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from itertools import combinations
@@ -79,7 +78,7 @@ from scrapemend.heal.anchors import (
     rank,
 )
 from scrapemend.heal.pages import Pages
-from scrapemend.pipeline import ListingPage, RunSummary
+from scrapemend.pipeline import RunSummary
 from scrapemend.spec import RegexSpec, SourceSpec
 
 MIN_ANCHORS = 3  # anchor pages that must load for a verdict (all of them, if fewer)
@@ -142,13 +141,13 @@ class ShadowField(BaseModel):
 class ShadowRun(BaseModel):
     """What the candidate's crawl of the source found."""
 
-    scope: Literal["full", "sample"]
-    listing_pages: int = 0  # listing pages read
+    scope: Literal["full", "sample"]  # a sample reads every listing page, some detail pages
+    listing_pages: int = 0  # listing pages read: every one along the next-page link
     items: int = 0  # items the item container matched on them
+    drawn: int = 0  # in a sample: the items whose detail pages it read
     records: int = 0  # records read, each key once
     known: int = 0  # records the last good run had
     compared: int = 0  # records read whose key the last good run had
-    sampled: list[str] = Field(default_factory=list)  # in a sample: the listing pages drawn
     fields: dict[str, ShadowField] = Field(default_factory=dict)
 
 
@@ -157,9 +156,9 @@ class ShadowPlan(BaseModel):
     last good run's counts and the pages already stored."""
 
     scope: Literal["full", "sample"]
-    records: int  # the last good run's records it means to compare
+    records: int  # the records it means to read: the last good run's, or a sample's
     known: int  # the last good run's records
-    listing_pages: int  # listing pages to read: as many as the last good run's, or drawn
+    listing_pages: int  # listing pages to read: as many as the last good run's
     detail_pages: int  # detail pages to read (none without item.follow)
     stored: int  # of those pages, the ones at hand already
     requests: int  # the others: about one request each
@@ -405,8 +404,8 @@ def _regexes(spec: SourceSpec, extractor: Extractor) -> Check:
 def _covered(shadow: ShadowRun) -> str:
     if shadow.scope == "sample":
         read = (
-            f"a sample: {shadow.records} records from {len(shadow.sampled)} listing pages "
-            "drawn from the last good run's"
+            f"every listing page and a sample of detail pages: {shadow.listing_pages} listing "
+            f"pages, {shadow.items} items, {shadow.records} records"
         )
     else:
         read = f"the whole source: {shadow.listing_pages} listing pages, {shadow.records} records"
@@ -693,23 +692,23 @@ def _shadow(
     """Crawl the source with the candidate and compare its records with the last good
     run's. Returns what it found, the problems, and why it couldn't run, if it couldn't."""
     limit = spec.heal.shadow_max_items
-    cap = limit if isinstance(limit, int) else None  # all: the whole source
+    # all: the whole source. A spec without detail pages has its records on the listing
+    # pages, which a sample reads too, so there is nothing to save.
+    cap = limit if isinstance(limit, int) and spec.item.follow is not None else None
     sampled = cap is not None and len(known) > cap
     run = ShadowRun(scope="sample" if sampled else "full", known=len(known))
     if not known:
         return run, [], "the last good run's records are not stored"
     if on_shadow is not None:
-        plan = _plan(spec, pages, known, baseline, cap if sampled else None)
-        if plan is not None:
-            on_shadow(plan)
+        on_shadow(_plan(spec, pages, first, known, baseline, cap if sampled else None))
     crawl = _Crawl(spec, pages, extractor, run)
     comparison = _Comparison(spec, known, baseline, run)
-    records = crawl.sample(cap, baseline) if cap is not None and sampled else crawl.all(first)
+    records = crawl.sample(first, cap) if cap is not None and sampled else crawl.all(first)
     for key, result in records:
         comparison.add(key, result)
     if crawl.unavailable is not None:
         # Stopped short: what it compared may still prove the candidate wrong.
-        most = crawl.drawn if sampled else len(known)
+        most = run.drawn if sampled else len(known)
         problems = comparison.problems(threshold, spec.heal.volatile_change, out_of=most)
         stopped = crawl.unavailable
         if run.listing_pages:
@@ -722,9 +721,17 @@ def _shadow(
     problems = crawl.problems
     min_found = spec.heal.shadow_min_found
     if sampled:
-        if run.compared < min_found * crawl.drawn:
+        # Every listing page was read: their items are what a run would find.
+        had = baseline.items if baseline is not None else 0
+        if run.items < min_found * had:
             problems.append(
-                f"only {run.compared} of the {crawl.drawn} sampled records are known from the "
+                f"the shadow run found {run.items} items on {run.listing_pages} listing pages, "
+                f"where the last good run found {had} (needs {min_found:.0%}): the item "
+                "container or the pagination miss some"
+            )
+        if run.compared < min_found * run.drawn:
+            problems.append(
+                f"only {run.compared} of the {run.drawn} sampled records are known from the "
                 f"last good run (needs {min_found:.0%}): the detail link or the key reads "
                 "something else"
             )
@@ -744,40 +751,36 @@ def _shadow(
 def _plan(
     spec: SourceSpec,
     pages: Pages,
+    first: Document,
     known: KnownRecords,
     baseline: RunSummary | None,
     cap: int | None,
-) -> ShadowPlan | None:
-    """What the shadow run will read, for a sample of `cap` records or the whole
-    source: as many pages as the last good run read, less the pages stored. Which
-    records a sample draws is known only once its listing pages are read: if they
-    are all stored, it is counted exactly (as when promote verifies again);
-    otherwise its detail pages are counted as not stored. None if it can't start."""
+) -> ShadowPlan:
+    """What the shadow run will read, for the whole source or every listing page and
+    a sample of `cap` detail pages: as many listing pages as the last good run read,
+    less the pages stored. Which records a sample draws is known only once its
+    listing pages are read: if they are all stored, it is counted exactly (as when
+    promote verifies again); otherwise its detail pages are counted as not stored."""
     follow = spec.item.follow is not None
     listings, details = pages.stored("listing"), pages.stored("detail") if follow else set()
+    paginate = spec.fetch.paginate
+    most = paginate.max_pages if paginate else 1
+    listing_pages = max(1, min(baseline.listing_pages if baseline else 1, most))
     if cap is None:
-        paginate = spec.fetch.paginate
-        most = paginate.max_pages if paginate else 1
-        listing_pages = max(1, min(baseline.listing_pages if baseline else 1, most))
         records = len(known)
         detail_pages = records if follow else 0
         stored = min(len(listings), listing_pages) + min(len(details), detail_pages)
     else:
-        recorded = baseline.listings if baseline is not None else []
-        if not recorded:
-            return None
-        drawn = [recorded[i] for i in _draw(spec, recorded, cap)]
-        listing_pages = len(drawn)
-        stored = sum(page.url in listings for page in drawn)
-        docs = [pages.listing(page.url) for page in drawn] if stored == len(drawn) else []
-        if docs and all(doc is not None for doc in docs):
-            keys = [key for doc in docs if doc is not None for key, _ in _items(spec, doc)]
-            chosen = _choose((key for key in keys if key is not None), cap)
-            records = len(chosen)
-            stored += sum(key in details for key in chosen)
+        walked = _stored_walk(spec, pages, first)
+        if walked is not None:
+            keys = [key for doc in walked for key, _ in _items(spec, doc) if key is not None]
+            chosen = _choose(keys, cap)
+            listing_pages, records = len(walked), len(chosen)
+            stored = len(walked) + sum(key in details for key in chosen)
         else:
-            records = min(cap, sum(page.items for page in drawn))
-        detail_pages = records if follow else 0
+            records = len(_choose(known, cap))
+            stored = min(len(listings), listing_pages)
+        detail_pages = records
     return ShadowPlan(
         scope="full" if cap is None else "sample",
         records=records,
@@ -790,16 +793,25 @@ def _plan(
     )
 
 
-def _draw(spec: SourceSpec, listings: list[ListingPage], cap: int) -> list[int]:
-    """The listing pages a sample reads, by their place among the last good run's:
-    as many as hold about twice `cap` items, at random with a fixed seed."""
-    per_page = sum(p.items for p in listings) / len(listings)
-    count = min(len(listings), math.ceil(2 * cap / max(per_page, 1.0)))
-    return sorted(random.Random(f"{SHADOW_SEED}:{spec.id}").sample(range(len(listings)), count))
+def _stored_walk(spec: SourceSpec, pages: Pages, first: Document) -> list[Document] | None:
+    """The listing pages along the next-page link, if every one is stored: then what
+    a sample will read is known before it starts. None if one isn't."""
+    paginate = spec.fetch.paginate
+    walked, visited, stored = [first], {first.url}, pages.stored("listing")
+    while paginate is not None and len(walked) < paginate.max_pages:
+        link = find_link(paginate.next, walked[-1])
+        if link is None or link in visited:
+            break
+        page = pages.listing(link) if link in stored else None
+        if page is None:
+            return None
+        visited.add(link)
+        walked.append(page)
+    return walked
 
 
 def _choose(keys: Iterable[str], cap: int) -> list[str]:
-    """The records a sample reads from the items of the listing pages drawn: `cap` of
+    """The records a sample reads from the items of every listing page: `cap` of
     them, at random with a fixed seed."""
     return sorted(dict.fromkeys(keys), key=lambda key: rank(key, SHADOW_SEED))[:cap]
 
@@ -818,65 +830,49 @@ class _Crawl:
         self.run = run
         self.problems: list[str] = []
         self.unavailable: str | None = None
-        self.drawn = 0  # in a sample: the items drawn
         self._links: set[str] = set()
 
     def all(self, first: Document) -> Iterator[tuple[str, RecordResult]]:
-        """Like a run: every listing page along the next-page link, up to max_pages."""
-        paginate = self.spec.fetch.paginate
-        max_pages = paginate.max_pages if paginate else 1
-        page, number, visited = first, 1, {first.url}
-        while True:
+        """Like a run: every item of every listing page, and its record."""
+        for page, number in self._walk(first):
             yield from self._records(page, number)
-            if self.unavailable is not None or paginate is None or number >= max_pages:
-                return
-            link = find_link(paginate.next, page)
-            if link is None or link in visited:
-                return
-            visited.add(link)
-            loaded = self._listing(link, number + 1, missing_is_wrong=True)
-            if loaded is None:
-                return
-            page, number = loaded, number + 1
 
-    def sample(self, cap: int, baseline: RunSummary | None) -> Iterator[tuple[str, RecordResult]]:
-        """Listing pages drawn from the last good run's, and up to `cap` of their items."""
-        listings = baseline.listings if baseline is not None else []
-        if not listings:
-            self.unavailable = (
-                "the last good run's listing pages are not recorded, so none can be drawn; "
-                "set heal.shadow_max_items to all to read the whole source"
-            )
-            return
-        drawn = _draw(self.spec, listings, cap)
+    def sample(self, first: Document, cap: int) -> Iterator[tuple[str, RecordResult]]:
+        """Every listing page, like a run, then the records of `cap` of their items."""
         pool: dict[str, Document] = {}
-        old = found = 0
-        for index in drawn:
-            listing = listings[index]
-            page = self._listing(listing.url, index + 1, missing_is_wrong=False)
-            if page is None:
-                return
-            self.run.sampled.append(listing.url)
-            items = self._listed(page, index + 1)
-            old += listing.items
-            found += len(items)
-            for key, item in items:
+        for page, number in self._walk(first):
+            for key, item in self._listed(page, number):
                 if key is not None:
                     pool.setdefault(key, item)
-        min_found = self.spec.heal.shadow_min_found
-        if found < min_found * old:
-            self.problems.append(
-                f"the item container finds {found} items on {len(drawn)} sampled listing "
-                f"pages, where the last good run found {old} (needs {min_found:.0%})"
-            )
+        if self.unavailable is not None:
+            return
         chosen = _choose(pool, cap)
-        self.drawn = len(chosen)
+        self.run.drawn = len(chosen)
         for key in chosen:
             record = self._record(key, pool[key])
             if self.unavailable is not None:
                 return
             if record is not None:
                 yield record
+
+    def _walk(self, first: Document) -> Iterator[tuple[Document, int]]:
+        """The listing pages along the candidate's next-page link, from the first until
+        the link ends, up to max_pages: what a run reads. Each with its number."""
+        paginate = self.spec.fetch.paginate
+        max_pages = paginate.max_pages if paginate else 1
+        page, number, visited = first, 1, {first.url}
+        while True:
+            yield page, number
+            if self.unavailable is not None or paginate is None or number >= max_pages:
+                return
+            link = find_link(paginate.next, page)
+            if link is None or link in visited:
+                return
+            visited.add(link)
+            loaded = self._listing(link, number + 1)
+            if loaded is None:
+                return
+            page, number = loaded, number + 1
 
     def _records(self, page: Document, number: int) -> Iterator[tuple[str, RecordResult]]:
         for key, item in self._listed(page, number):
@@ -896,12 +892,12 @@ class _Crawl:
         self.problems += _item_problems(self.spec, items, number)
         return items
 
-    def _listing(self, url: str, number: int, *, missing_is_wrong: bool) -> Document | None:
+    def _listing(self, url: str, number: int) -> Document | None:
         page = self.pages.listing(url)
         if page is None:
             failure = self.pages.failure(url)
             reason = failure.reason if failure else "it did not load"
-            if missing_is_wrong and failure is not None and not failure.unreachable:
+            if failure is not None and not failure.unreachable:
                 self.problems.append(f"listing page {number} is missing ({reason}): {url}")
             else:
                 self.unavailable = f"listing page {number} could not be loaded ({reason}): {url}"

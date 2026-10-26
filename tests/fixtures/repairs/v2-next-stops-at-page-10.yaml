@@ -1,0 +1,54 @@
+# Review attack B6 on layout v2: the next-page link is refused when its URL contains
+# "page=1", so it works from page 1 to 9 and stops there, as a selector that fails on
+# two-digit page numbers would. The quick checks follow the link for two pages only.
+confidence: 0.9
+container:
+  css: table.tender-table tr.tender-row
+fields:
+  authority:
+    strategies:
+    - css: dd.tender__buyer
+    - label: Contracting authority
+  category:
+    strategies:
+    - css: dd.tender__category
+    - label: Category
+  deadline:
+    strategies:
+    - css: dd.tender__closing
+    - label: Deadline
+  description:
+    strategies:
+    - css: div.tender__description p
+  location:
+    strategies:
+    - css: dd.tender__location
+    - label: Location
+  published:
+    strategies:
+    - css: dd.tender__published
+    - label: Published
+  reference:
+    strategies:
+    - css: dd.tender__ref
+    - label: Reference
+  status:
+    strategies:
+    - css: dd.tender__status
+    - label: Status
+  title:
+    strategies:
+    - css: h1.tender__title
+  value:
+    strategies:
+    - css: dd.tender__amount
+    - regex: Estimated value:?\s*(€\s?[\d,.]+)
+follow:
+  css: a.tender-link::attr(href)
+next_page:
+  xpath: //a[@rel='next'][not(contains(@href, 'page=1'))]/@href
+rationale: 'Layout v2 renamed every class (tr.notice -> tr.tender-row, dd.deadline -> dd.tender__closing,
+  ...) and replaced the pager list with rel=next links. The page structure is the same, so new CSS selectors
+  restore every field. Label fallbacks are kept, because the dt/dd labels survived the redesign.
+
+  '

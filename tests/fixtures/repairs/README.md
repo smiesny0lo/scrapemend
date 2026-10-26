@@ -27,6 +27,12 @@ used to miss:
 | `v3-location-last-word.yaml` | S3 | the same, on layout v3 |
 | `v2-redos.yaml` | R | a `description` regex that backtracks catastrophically |
 
+From the second review, of the shadow-run gate: wrong in ways the shadow run used to let through.
+
+| Fixture | Review | Defect |
+|---|---|---|
+| `v2-next-stops-at-page-10.yaml` | B6 | the next-page link stops at page 10: on 1200 notices, 1020 never read again |
+
 Overfitted repairs (strategies that only match the anchors a provider was shown)
 are built in the tests from the shown anchors' values, since which anchors are
 shown depends on the anchors the good run kept.

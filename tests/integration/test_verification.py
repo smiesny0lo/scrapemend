@@ -7,8 +7,10 @@ ones (wrong field mapped, empty, overfitted to the anchors a provider was shown)
 import random
 import re
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -83,20 +85,25 @@ class Broken:
         return anchors
 
 
-# One good run and one redesign per layout, shared by the tests of this module.
-@pytest.fixture(scope="module", params=[2, 3], ids=["v2", "v3"])
-def broken(
-    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+@contextmanager
+def redesigned(
+    tmp_path: Path,
+    layout: int,
+    notices: list[Notice] | None = None,
+    change: Callable[[dict[str, Any]], None] | None = None,
 ) -> Iterator[Broken]:
-    tmp_path = tmp_path_factory.mktemp(f"v{request.param}")
+    """The demo site (or one serving `notices`) after a good run on layout v1, then a
+    redesign to `layout` and a failed run. `change` edits demo.yaml's data first."""
     clock = FakeClock()
-    app = create_app(layout=1)
+    app = create_app(layout=1, notices=notices)
     app.state.chaos.clock = clock
     state = State(tmp_path / "state.db")
     snapshots = FilesystemSnapshotStore(tmp_path / "snapshots")
     with serve(app) as base_url:
         data = load_spec(ROOT / "examples" / "sources" / "demo.yaml").model_dump(mode="json")
         data["fetch"]["start"] = f"{base_url}/notices"
+        if change is not None:
+            change(data)
         spec = SourceSpec.model_validate(data)
 
         def fetcher() -> HttpFetcher:
@@ -105,7 +112,7 @@ def broken(
             )
 
         assert run_source(spec, fetcher(), snapshots, state).status == "ok"
-        app.state.layout = request.param
+        app.state.layout = layout
         failed = run_source(spec, fetcher(), snapshots, state)
         assert failed.status == "layout_changed"
         good = state.runs.last_good(spec.id)
@@ -122,6 +129,32 @@ def broken(
             pages=PageSource(snapshots, spec.id, failed.run_id, fetcher=fetcher(), spec_version=1),
             new_fetcher=fetcher,
         )
+        state.close()
+
+
+# One good run and one redesign per layout, shared by the tests of this module.
+@pytest.fixture(scope="module", params=[2, 3], ids=["v2", "v3"])
+def broken(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[Broken]:
+    with redesigned(tmp_path_factory.mktemp(f"v{request.param}"), request.param) as b:
+        yield b
+
+
+def large(data: dict[str, Any]) -> None:
+    """demo.yaml for a source of 1200 notices, verified with heal.shadow_max_items'
+    default (500): the shadow run samples."""
+    data["fetch"]["paginate"]["max_pages"] = 100
+    data["expect"]["min_items_per_run"] = 1200
+    del data["heal"]["shadow_max_items"]
+
+
+@pytest.fixture(scope="module")
+def big(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Broken]:
+    """1200 notices on 60 listing pages, redesigned to layout v2. The first 200 are
+    the demo's own."""
+    with redesigned(tmp_path_factory.mktemp("big"), 2, generate_notices(count=1200), large) as b:
+        yield b
 
 
 @pytest.fixture(scope="module")
@@ -378,10 +411,13 @@ def test_review_attacks_on_the_anchors_stay_rejected(broken: Broken) -> None:
     assert report.problems[0].startswith(f"{field} reproduces 0/10 anchor values")
 
 
-SAMPLED_PAGES = [1, 3, 4, 5, 10]  # drawn with the shadow run's fixed seed
-
-
-def test_a_sampled_shadow_run_draws_from_the_whole_source(broken: Broken) -> None:
+def test_a_sampled_shadow_run_reads_every_listing_page_and_a_sample_of_detail_pages(
+    broken: Broken,
+) -> None:
+    # Replaces test_a_sampled_shadow_run_draws_from_the_whole_source, which pinned the
+    # listing pages a sample drew at random (5 of 10, by URL): it never followed the
+    # candidate's next-page link. Now it reads every listing page along that link, and
+    # draws the detail pages it reads from all their items, the same ones every time.
     data = broken.spec.model_dump(mode="json")
     data["heal"]["shadow_max_items"] = 50
     sampled = SourceSpec.model_validate(data)
@@ -396,13 +432,8 @@ def test_a_sampled_shadow_run_draws_from_the_whole_source(broken: Broken) -> Non
     assert report.accepted, report.problems
     shadow = report.shadow
     assert shadow is not None
-    assert (shadow.scope, shadow.records, shadow.compared) == ("sample", 50, 50)
-    # ceil(2 * 50 / 20) = 5 of the last good run's 10 listing pages, drawn at random:
-    # not the first five, and the same ones every time.
-    start = str(broken.spec.fetch.start)
-    numbers = [1 if url == start else int(url.rsplit("=", 1)[1]) for url in shadow.sampled]
-    assert numbers == SAMPLED_PAGES
-    assert (shadow.listing_pages, shadow.items) == (5, 100)
+    assert (shadow.scope, shadow.listing_pages, shadow.items) == ("sample", 10, 200)
+    assert (shadow.drawn, shadow.records, shadow.compared) == (50, 50, 50)
     assert check(REPAIRS / f"demo-v{layout(broken)}.yaml").shadow == shadow
     if layout(broken) == 2:  # S2, with anchors it fits: every Awarded status empty
         _, fits, _ = ATTACKS["v2-status-enumerates-examples.yaml"]
@@ -410,6 +441,24 @@ def test_a_sampled_shadow_run_draws_from_the_whole_source(broken: Broken) -> Non
         s2 = check(BAD / "v2-status-enumerates-examples.yaml", broken.anchors_for(fitting[:10]))
         [problem] = s2.problems
         assert problem.startswith("status became empty on ")
+
+
+def test_a_sampled_shadow_run_follows_the_next_page_link_to_its_end(big: Broken) -> None:
+    # Review attack B6 on a source of 1200 notices, where the shadow run samples: the
+    # next-page link stops at page 10 of 60. A sample drew listing pages from the last
+    # good run's, by URL, so it never followed the link: B6 passed, and the next run
+    # read 180 of 1200 records.
+    report = big.check(load_patch(BAD / "v2-next-stops-at-page-10.yaml"))
+    assert report.problems == [
+        "the shadow run found 180 items on 9 listing pages, where the last good run found "
+        "1200 (needs 90%): the item container or the pagination miss some"
+    ]
+    correct = big.check(load_patch(REPAIRS / "demo-v2.yaml"))
+    assert correct.accepted, correct.problems
+    shadow = correct.shadow
+    assert shadow is not None
+    assert (shadow.scope, shadow.listing_pages, shadow.items) == ("sample", 60, 1200)
+    assert (shadow.drawn, shadow.compared) == (500, 500)
 
 
 def test_unloadable_anchor_pages_are_tolerated(broken: Broken) -> None:
