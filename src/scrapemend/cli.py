@@ -19,7 +19,13 @@ from scrapemend.detect.classify import Status
 from scrapemend.events import Notifier, Notifiers, make_notifier
 from scrapemend.extract import Extractor
 from scrapemend.extract.strategies import UnknownStrategy
-from scrapemend.fetch import DEFAULT_USER_AGENT, HttpFetcher, Requests
+from scrapemend.fetch import (
+    DEFAULT_USER_AGENT,
+    BlockedError,
+    HttpFetcher,
+    Requests,
+    RobotsDisallowed,
+)
 from scrapemend.heal.context import spec_yaml
 from scrapemend.heal.ladder import (
     HealOutcome,
@@ -161,8 +167,9 @@ def run(
     """Scrape a source with its active spec version, write one JSON record per line,
     judge the run, and heal as far as the spec's heal.mode allows.
 
-    A report goes to stderr. Exit codes: 0 good, 2 blocked or unreachable,
-    3 the data is broken (layout changed, nothing found, failing fields, quarantined).
+    A report goes to stderr. Exit codes: 0 good, 2 blocked or unreachable (healing
+    included), 3 the data is broken (layout changed, nothing found, failing fields,
+    quarantined).
     """
     state = State(db)
     active = _active(state, spec)
@@ -182,7 +189,7 @@ def run(
     store = FilesystemSnapshotStore(snapshots)
     try:
         with _fetcher(source, user_agent) as fetcher, _interruptible():
-            first, _, second = run_and_heal(
+            first, healing, second = run_and_heal(
                 source,
                 state,
                 store,
@@ -200,6 +207,8 @@ def run(
     finally:
         if out:
             output.close()
+    if healing is not None and healing.status == "blocked":
+        raise typer.Exit(2)  # the site refused us: more urgent than the broken data
     final = second or first
     raise typer.Exit(EXIT_CODES[final.status])
 
@@ -251,7 +260,8 @@ def heal_command(
     notify: NotifyOption = None,
 ) -> None:
     """Repair the latest failed run: get a patch, verify it on the current pages, and
-    promote it or leave it for `scrapemend promote` (exit 3 if nothing passed)."""
+    promote it or leave it for `scrapemend promote` (exit 3 if nothing passed, 2 if
+    the site refused us)."""
     state = State(db)
     source = _with_start(_active(state, spec).spec, start)
     repairer = _provider(provider, patch, model)
@@ -270,6 +280,8 @@ def heal_command(
             on_shadow=_print_plan("heal"),
         )
     _print_heal(outcome)
+    if outcome.status == "blocked":
+        raise typer.Exit(2)
     if outcome.status == "quarantined":
         raise typer.Exit(3)
     if outcome.status == "skipped" and outcome.run_id is not None:
@@ -354,8 +366,9 @@ def promote_command(
     user_agent: UserAgentOption = DEFAULT_USER_AGENT,
 ) -> None:
     """Verify a proposal again and make it the active spec version (exit 3 if a check
-    fails, or can't run without --force). Pages are read from the failed run's
-    snapshots where possible; a page that didn't load before is fetched again."""
+    fails, or can't run without --force; 2 if the site refused us). Pages are read
+    from the failed run's snapshots where possible; a page that didn't load before is
+    fetched again."""
     state = State(db)
     source_id = _load(spec).id
     found = state.proposals.get(proposal)
@@ -382,6 +395,12 @@ def promote_command(
             )
         except PromotionRefused as e:
             _fail(str(e), 1 if e.report is None else 3)
+        except (BlockedError, RobotsDisallowed) as e:
+            _fail(
+                f"promote: blocked: the site refused us ({e}); nothing was promoted. "
+                "scrapemend never works around a block: find out why before you try again",
+                2,
+            )
     verified = state.proposals.get(proposal)
     assert verified is not None
     onto = f" (re-based onto v{active.version})" if found.base_version != active.version else ""

@@ -87,7 +87,7 @@ For the same story one command at a time, see [examples/demo.md](examples/demo.m
 5. **Promote or quarantine.** A repair that passed every check becomes the next spec version, either automatically (`heal.mode: auto`, with structural evidence, as a provisional version until you `scrapemend confirm` it) or after `scrapemend promote`. If nothing passes, the source is quarantined and an alert goes to your notifiers (`--notify`). A repair whose checks couldn't all run (a page that won't load) is never promoted automatically: only `scrapemend promote --force`, never past a check that failed.
 6. **Watch.** The runs after a promotion are compared with the last good run: an emptier field, a common status gone, or numbers that changed magnitude are `drift`, and alert. A drift run never becomes the last good run by itself, so every run alerts until a human checks the data and runs `scrapemend accept-drift`.
 
-Blocks are never worked around. A 401/403, a robots.txt disallow or a bot-wall page stops the run as `blocked`. scrapemend respects robots.txt, keeps per-domain rate limits, backs off on 429/5xx, and sends an identifiable User-Agent.
+Blocks are never worked around. A 401/403, a robots.txt disallow or a bot-wall page stops the run as `blocked`, and a 401/403 or a robots.txt disallow during healing stops the heal the same way. scrapemend respects robots.txt, keeps per-domain rate limits, backs off on 429/5xx, and sends an identifiable User-Agent.
 
 ## Quick start with your own site
 

@@ -110,7 +110,8 @@ The price is what a lower share lets through: a repair that misses that many rec
 
 A repair is **accepted** only if every check passed. One that failed a check is **rejected**. One where a check couldn't run is **unverified**, never accepted. A check doesn't run when, for example:
 
-- a page couldn't be fetched (a timeout or a 5xx after every retry), or an old listing page a sample needs is gone;
+- a page couldn't be fetched (a timeout or a 5xx after every retry), in any check. Nothing is known about such a page, so even a whole outage leaves a correct repair unverified, never rejected. A page the site says is gone (a 404) is different: a listing page along the next-page link that is missing fails the listing check;
+- none of the sample's pages could be loaded;
 - the last good run's records aren't stored (a database from before they were kept), or fewer than 20 can be compared;
 - there are no anchors, or too few anchor pages load;
 - the failed run's listing page isn't in the snapshots (`promote` pointed at the wrong `--snapshots`);
@@ -125,6 +126,16 @@ heal: quarantined: proposal 1 could not be verified: shadow run: the last good r
 ```
 
 `scrapemend promote` verifies it again first. A page that didn't load before is fetched again, so promoting later may pass without anything else. If a check still can't run, only `--force` promotes it, and never past a check that failed. **Automatic promotion never uses `--force`.**
+
+### Blocked
+
+A site that refuses us is not a page that failed. A 401 or 403, or a page robots.txt disallows, stops `heal` (and `promote`) as **blocked**, wherever it happens: in a quick check or in the shadow run. Nothing is promoted, the source is quarantined, a `heal_blocked` alert goes out, and the command exits with 2. There is no `--force` past it: scrapemend never works around a block.
+
+```
+heal: blocked: the site refused us (HTTP 403: https://example.org/notices?page=2); healing stopped and nothing was promoted. scrapemend never works around a block: find out why before you heal again
+```
+
+A heal reads about as many pages as a run, so a site that blocks after a number of requests may block the heal when it never blocked a run.
 
 ```
 $ scrapemend promote examples/sources/demo.yaml 1

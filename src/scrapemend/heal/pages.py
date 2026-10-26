@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from scrapemend.extract import Document
-from scrapemend.fetch import BlockedError, Fetcher, FetchError
+from scrapemend.fetch import BlockedError, Fetcher, FetchError, RobotsDisallowed
 from scrapemend.snapshots import Snapshot, SnapshotKind, SnapshotStore
 
 
@@ -43,7 +43,9 @@ class Pages(Protocol):
 class PageSource:
     """The pages a run stored, plus live fetches (politely, through the given fetcher)
     of pages it didn't fetch. Live pages are stored as snapshots of the same run, so
-    a verification can be reproduced later without fetching again.
+    a verification can be reproduced later without fetching again. A site that
+    refuses us (BlockedError, or robots.txt: RobotsDisallowed) stops whoever asked:
+    scrapemend never works around a block, so it isn't a page that merely failed.
 
     A page that fails to load isn't asked for again by the same source: a new
     PageSource tries it again."""
@@ -110,7 +112,7 @@ class PageSource:
             return None
         try:
             response = self.fetcher.fetch(url)
-        except BlockedError:
+        except (BlockedError, RobotsDisallowed):
             raise
         except FetchError as e:
             self._failures[url] = PageFailure(e.reason, unreachable=True)

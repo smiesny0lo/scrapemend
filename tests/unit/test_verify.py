@@ -1070,6 +1070,32 @@ def test_next_listing_page_must_load() -> None:
     assert report.problems == [f"listing page 2 could not be loaded: {BASE}/list?page=2"]
 
 
+def test_a_listing_page_that_cannot_be_fetched_leaves_the_listing_check_not_run() -> None:
+    # An outage made a correct repair rejected for "listing page 2 could not be loaded",
+    # so it couldn't even be forced, and a provider's second attempt went to fixing a
+    # link that was fine. Nothing is known about a page that can't be fetched; one the
+    # site says is missing still fails (test_next_listing_page_must_load).
+    page_2 = f"{BASE}/list?page=2"
+    report = run(spec(), FakePages(DETAILS, listing_for(URLS), unreachable={page_2}))
+    assert (report.verdict, report.problems) == ("not run", [])
+    assert not_run(report)["listing"] == (
+        f"listing page 2 could not be loaded (HTTP 503 after 4 attempts): {page_2}"
+    )
+
+
+def test_a_sample_that_loaded_no_page_did_not_run() -> None:
+    # It said "passed: 0 other pages": a check that covered nothing.
+    report = run(spec(), FakePages(DETAILS, listing_for(URLS), unreachable=set(URLS[10:20])))
+    assert not_run(report)["sample"] == "none of the 10 other pages could be loaded"
+
+
+def test_a_full_outage_leaves_a_correct_repair_unverified() -> None:
+    every = {*DETAILS, *MORE}
+    report = run(spec(), FakePages(DETAILS, listing_for(URLS), unreachable=every))
+    assert (report.verdict, report.problems) == ("not run", [])
+    assert set(not_run(report)) == {"listing", "anchors", "sample", "shadow run"}
+
+
 def test_next_listing_page_must_have_items() -> None:
     more = MORE | {f"{BASE}/list?page=2": "<p>Nothing here</p>"}
     report = run(spec(), FakePages(DETAILS, listing_for(URLS), more))

@@ -288,15 +288,17 @@ def verify(
         if not items:
             problems.append("the item container matches nothing on the listing page")
         problems += _item_problems(spec, items, 1)
-        seen, walk_problems = _walk(spec, pages, first, items, baseline)
+        seen, walk_problems, unreachable = _walk(spec, pages, first, items, baseline)
         listing_pages = len(seen)
         problems += walk_problems
         for page in seen:
             rows.add(page)
+    else:
+        unreachable = "no listing page of the failed run to verify against"
     listing = _check(
         "listing",
         problems,
-        None if listings else "no listing page of the failed run to verify against",
+        unreachable,
         f"{listing_items} items on the first listing page, "
         f"{listing_pages} listing pages along the next-page link",
     )
@@ -349,10 +351,11 @@ def verify(
         doc = pages.page(key) if spec.item.follow else item
         if doc is not None:
             sample.append(extractor.extract(doc))
+    tried = len(others[:SAMPLE_PAGES])
     sample_check = _check(
         "sample",
         _sample_problems(spec, anchors, sample, unit),
-        None,
+        f"none of the {tried} other {unit} could be loaded" if tried and not sample else None,
         f"{len(sample)} other {unit}",
     )
 
@@ -600,16 +603,17 @@ def _walk(
     first: Document,
     items: list[tuple[str | None, Document]],
     baseline: RunSummary | None,
-) -> tuple[list[Document], list[str]]:
+) -> tuple[list[Document], list[str], str | None]:
     """Follow the next-page link from the first listing page for PAGINATION_HOPS
     pages, or until it ends. Each page must load and bring items not seen on the
     pages before, every item on it must have its key, and the link must not end
     before the last good run's did. Returns the listing pages seen, the first
-    included, and the problems found."""
+    included, the problems found, and why it stopped if a page couldn't be fetched:
+    then nothing is known about it, and the link may be fine."""
     walked = [first]
     paginate = spec.fetch.paginate
     if paginate is None:
-        return walked, []
+        return walked, [], None
     problems: list[str] = []
     seen = {key for key, _ in items if key}
     visited = {first.url}
@@ -620,24 +624,33 @@ def _walk(
             break
         if link in visited:
             problem = f"the next-page link on listing page {number} leads back to an earlier page"
-            return walked, [*problems, problem]
+            return walked, [*problems, problem], None
         visited.add(link)
         page = pages.listing(link)
         if page is None:
-            return walked, [*problems, f"listing page {number + 1} could not be loaded: {link}"]
+            failure = pages.failure(link)
+            if failure is None or failure.unreachable:
+                reason = failure.reason if failure else "it did not load"
+                unreachable = f"listing page {number + 1} could not be loaded ({reason}): {link}"
+                return walked, problems, unreachable
+            return (
+                walked,
+                [*problems, f"listing page {number + 1} could not be loaded: {link}"],
+                None,
+            )
         walked.append(page)
         items = _items(spec, page)
         keys = [key for key, _ in items if key]
         if not keys:
             problem = f"the item container matches nothing on listing page {number + 1}"
-            return walked, [*problems, problem]
+            return walked, [*problems, problem], None
         repeated = sum(key in seen for key in keys)
         if repeated > MAX_REPEATED_SHARE * len(keys):
             problem = (
                 f"the next-page link on listing page {number} leads to a page that repeats "
                 f"{repeated} of {len(keys)} items already seen"
             )
-            return walked, [*problems, problem]
+            return walked, [*problems, problem], None
         problems += _item_problems(spec, items, number + 1)
         seen.update(keys)
     expected = 1 if baseline is None else min(PAGINATION_HOPS + 1, baseline.listing_pages)
@@ -649,7 +662,7 @@ def _walk(
             else f"pagination ends after {len(walked)} listing pages; "
             f"the last good run had {baseline.listing_pages}"
         )
-    return walked, problems
+    return walked, problems, None
 
 
 def _item_problems(

@@ -20,6 +20,7 @@ import pytest
 from fastapi import FastAPI
 from typer.testing import CliRunner
 
+from examples.mutating_site import app as demo_site
 from examples.mutating_site.app import create_app
 from examples.mutating_site.chaos import Chaos, parse_modes
 from examples.mutating_site.records import generate_notices
@@ -844,6 +845,79 @@ def test_blocked_is_never_repaired(world: World) -> None:
     outcome = world.heal(PatchProvider(load_patch(REPAIRS / "demo-v2.yaml")))
     assert outcome.status == "skipped" and "never works around blocks" in outcome.message
     assert world.state.proposals.for_source("tenders-demo") == []
+
+
+def test_a_block_during_heal_stops_it(world: World) -> None:
+    # The site blocks us after the run: a 403 during heal was a traceback, exit code 1,
+    # with no alert and nothing recorded.
+    world.layout(2)
+    world.run()
+    world.site.app.state.chaos = Chaos(parse_modes("blocked"), clock=world.site.clock)
+    repair = str(REPAIRS / "demo-v2.yaml")
+    healed = cli_run(world, "heal", "--patch", repair, "--notify", "stdout")
+    assert healed.exit_code == 2, healed.output
+    assert "heal: blocked: the site refused us (HTTP 403: " in healed.output
+    assert "[ERROR] tenders-demo: heal_blocked: " in healed.output
+    assert "--force" not in healed.output
+    state = world.state.specs.state("tenders-demo")
+    assert state is not None and (state.quarantine_reason or "").startswith("heal was blocked")
+    assert world.state.proposals.for_source("tenders-demo") == []
+    active = world.state.specs.active("tenders-demo")
+    assert active is not None and active.version == 1
+
+
+def test_a_robots_disallow_during_heal_stops_it_too(
+    world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # robots.txt disallows the listing's later pages, which only heal reads: heal took
+    # them for pages that didn't load, and said to promote the repair with --force.
+    rules = "User-agent: *\nDisallow: /admin/\nDisallow: /notices?page=\n"
+    monkeypatch.setattr(demo_site, "ROBOTS_TXT", rules)
+    world.layout(2)
+    repair = str(REPAIRS / "demo-v2.yaml")
+    ran = cli_run(world, "run", "--patch", repair, "--out", str(tmp_path / "out.jsonl"))
+    assert ran.exit_code == 2, ran.output  # the run's own layout_changed would be 3
+    assert "status: layout_changed" in ran.output
+    assert "heal: blocked: the site refused us (disallowed by robots.txt: " in ran.output
+    assert "--force" not in ran.output
+
+
+def test_a_block_during_promote_stops_it(world: World) -> None:
+    world.layout(2)
+    failed = world.run()
+    down = f"{world.site.base_url}/notices/TN-2026-0091"
+    spec = world.spec
+    outcome = heal(
+        spec, world.state, world.snapshots, Unreachable(fetcher(world.site, spec), down),
+        PatchProvider(load_patch(REPAIRS / "demo-v2.yaml")), run_id=failed.run_id,
+    )  # fmt: skip
+    [proposal] = outcome.proposals
+    assert proposal.status == "unverified"
+    world.site.app.state.chaos = Chaos(parse_modes("blocked"), clock=world.site.clock)
+    for force in ([], ["--force"]):
+        refused = cli_run(world, "promote", str(proposal.id), *force)
+        assert refused.exit_code == 2, refused.output
+        assert "promote: blocked: the site refused us (HTTP 403: " in refused.output
+        assert "pass --force" not in refused.output
+    active = world.state.specs.active("tenders-demo")
+    assert active is not None and active.version == 1
+
+
+def test_an_outage_during_heal_leaves_the_repair_unverified(world: World) -> None:
+    # Every page answers 503 after the run. The correct repair was rejected for
+    # "listing page 2 could not be loaded": it couldn't be forced, and a provider's
+    # second attempt went to fixing a link that was fine.
+    world.layout(2)
+    world.run()
+    world.site.app.state.chaos = Chaos(
+        parse_modes("flaky"), failure_rate=1.0, clock=world.site.clock
+    )
+    correct = load_patch(REPAIRS / "demo-v2.yaml")
+    outcome = world.heal(Scripted(correct, correct))
+    assert outcome.status == "quarantined"
+    [proposal] = outcome.proposals  # no second attempt: a new patch can't make a page load
+    assert (proposal.status, proposal.report.problems) == ("unverified", [])
+    assert proposal.report.check("listing").status == "not run"
 
 
 def test_partial_failure_is_proposed_not_auto_promoted(world: World) -> None:

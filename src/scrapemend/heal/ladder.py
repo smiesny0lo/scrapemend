@@ -15,7 +15,10 @@ patch back for another attempt. Then:
   `scrapemend promote --force` may promote it, never automatically.
 
 Blocked and transient failures are never repaired (the site refused or failed us,
-and that is not a markup problem), and neither is drift (real-world change).
+and that is not a markup problem), and neither is drift (real-world change). A site
+that refuses us while healing (a 401/403, a robots.txt disallow) stops it as
+blocked: nothing is promoted, the source is quarantined, and no --force can get
+past it, because scrapemend never works around a block.
 """
 
 from collections.abc import Callable
@@ -26,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from scrapemend.detect.classify import Status
 from scrapemend.events import Event, EventKind, Notifier
-from scrapemend.fetch import Fetcher, Requests
+from scrapemend.fetch import BlockedError, Fetcher, Requests, RobotsDisallowed
 from scrapemend.heal.anchors import Anchor, split
 from scrapemend.heal.context import RepairContext, examples, prune_document, spec_yaml
 from scrapemend.heal.pages import Pages, PageSource
@@ -53,7 +56,7 @@ NOT_REPAIRED = {
     "drift": "drift is real-world change, so it is reported, not repaired",
 }
 
-HealStatus = Literal["promoted", "proposed", "quarantined", "skipped"]
+HealStatus = Literal["promoted", "proposed", "quarantined", "skipped", "blocked"]
 
 
 class HealOutcome(BaseModel):
@@ -127,6 +130,45 @@ def _heal(
             event = Event(kind=kind, source_id=spec.id, message=message, run_id=failed.run_id)
             notifier.notify(event)
 
+    proposals: list[Proposal] = []  # this heal's, as they are stored
+    try:
+        return _repair(
+            spec, state, snapshots, fetcher, provider,
+            failed, mode, attempts, alert, on_shadow, proposals,
+        )  # fmt: skip
+    except (BlockedError, RobotsDisallowed) as e:
+        reason = f"heal was blocked: the site refused us ({e})"
+        state.specs.quarantine(spec.id, reason)
+        message = (
+            f"the site refused us ({e}); healing stopped and nothing was promoted. scrapemend "
+            "never works around a block: find out why before you heal again"
+        )
+        alert("heal_blocked", message)
+        return HealOutcome(
+            source_id=spec.id,
+            status="blocked",
+            message=message,
+            run_id=failed.run_id,
+            proposals=proposals,
+        )
+
+
+def _repair(
+    spec: SourceSpec,
+    state: State,
+    snapshots: SnapshotStore,
+    fetcher: Fetcher,
+    provider: RepairProvider,
+    failed: RunReport,
+    mode: Literal["propose", "auto"],
+    attempts: int,
+    alert: Callable[[EventKind, str], None],
+    on_shadow: Callable[[ShadowPlan], None] | None,
+    proposals: list[Proposal],
+) -> HealOutcome:
+    """Get repairs, verify them, and promote, propose or quarantine. Each proposal is
+    added to `proposals` as it is stored."""
+
     anchors = state.anchors.all(spec.id)
     if not anchors:
         reason = "no good run yet, so no anchors to verify a repair against"
@@ -143,7 +185,6 @@ def _heal(
     )
     context = build_context(spec, failed, baseline, anchors, pages, snapshots)
 
-    proposals: list[Proposal] = []
     error = None
     for _ in range(attempts):
         try:

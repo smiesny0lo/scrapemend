@@ -49,7 +49,7 @@ Every run is compared with the **last good run**: the latest complete run whose 
 | `empty` | the item container matched nothing on a page whose structure didn't change | 3 |
 | `partial` | some fields or pages fail, but the structure is unchanged | 3 |
 
-Exit code 1 means a usage or spec error. A quarantined source also exits with 3 until it's repaired.
+Exit code 1 means a usage or spec error. A quarantined source also exits with 3 until it's repaired. A run whose heal was blocked exits with 2, whatever the run's own status.
 
 Each report says how many HTTP requests that run sent, retries and robots.txt included (`requests: 211 (0 retried)`). When a run heals, the heal reports its own requests (mostly the shadow run's), and so does the run after a promotion: no line counts another step's.
 
@@ -134,6 +134,7 @@ scrapemend is polite by default, and none of this can be turned off from a spec 
   - Every 429 doubles the spacing for the rest of the run.
 - **Retries:** timeouts, connection errors, 408, 429 and 5xx are tried up to 4 times in all, with backoff (1 s, 2 s, 4 s plus jitter) or exactly the wait `Retry-After` asks for. If the server asks for an absurd wait, the run gives up instead of waiting.
 - **401/403** stops the run as `blocked`. It's never retried and never worked around.
+- **During `heal` and `promote`**, a 401/403 or a page robots.txt disallows stops them as `blocked` too: exit code 2, a `heal_blocked` alert, the source quarantined and nothing promoted. There is no `--force` past a block (see [blocked](verification.md#blocked)).
 - **User-Agent:** set it to name you or your project and a contact address.
 
 ## Alerts
@@ -141,7 +142,7 @@ scrapemend is polite by default, and none of this can be turned off from a spec 
 With `--notify stdout` (or `log`), scrapemend reports these events:
 
 - `run_failed`, `run_recovered`, `warning` and `drift`;
-- for repairs: `repair_proposed`, `repair_rejected` and `repair_promoted`;
+- for repairs: `repair_proposed`, `repair_rejected` and `repair_promoted`, and `heal_blocked` when the site refused us while healing;
 - `quarantined`, when a source needs a human.
 
 `log` sends them to the `scrapemend` logger, for whatever handlers your host configures. A notifier that fails is logged and skipped; it never breaks a run. To add your own channel (a webhook, a chat message), register a notifier under the `scrapemend.notifiers` entry point group. It's a class with a `notify(event)` method; see `scrapemend.events`.
