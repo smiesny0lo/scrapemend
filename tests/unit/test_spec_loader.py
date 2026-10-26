@@ -45,6 +45,11 @@ def test_demo_spec_loads() -> None:
     assert spec.fields["deadline"].date_format == "%d %b %Y"
 
 
+def test_demo_specs_shadow_run_the_whole_source() -> None:
+    for name in ("demo.yaml", "demo-listing.yaml"):
+        assert load_spec(DEMO_SPEC.parent / name).heal.shadow_max_items == "all", name
+
+
 def test_base_spec_parses() -> None:
     assert parse_spec(BASE).fields["title"].required
 

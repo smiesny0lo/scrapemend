@@ -61,7 +61,13 @@ The candidate crawls the source as a run would: every listing page along **its**
 
 The comparison needs at least 20 records both runs have (or all of them, if the last good run had fewer).
 
-For a large source, **`heal.shadow_max_items`** caps the records the shadow run reads. It then draws listing pages at random, with a fixed seed, from the last good run's (twice as many as the cap needs), and checks each one's item count against the last good run's count for the same page. From their items it draws up to the cap, again with a fixed seed. At least 90% of the records drawn must be known from the last good run. The same pages and records are drawn every time, so a verdict can be reached again.
+When the last good run had more records than **`heal.shadow_max_items`** (default 500), the shadow run reads a sample of that many. It draws listing pages at random, with a fixed seed, from the last good run's (twice as many as the cap needs), and checks each one's item count against the last good run's count for the same page. From their items it draws up to the cap, again with a fixed seed. At least 90% of the records drawn must be known from the last good run. The same pages and records are drawn every time, so a verdict can be reached again. `shadow_max_items: all` reads the whole source instead, however large.
+
+Before the shadow run starts, `heal` (and `promote`) say what it will read, and about how many requests that takes at the spec's rate limit: one per page that isn't stored yet. A crawl you can't afford now can be stopped with Ctrl-C.
+
+```
+heal: shadow run: the whole source, all 200 of the last good run's records: about 187 requests (10 listing pages and 200 detail pages, 23 of them stored), at least 9s at 20 requests a second
+```
 
 ### Fail closed
 
@@ -136,7 +142,7 @@ The suite also runs the gate against the demo site with these repairs:
 
 ## What the gate guarantees
 
-When a repair is accepted with the default settings and a full shadow run, then, on the pages it read under the new layout (the whole source along its next-page link, up to `max_pages`):
+When a repair is accepted with the default settings and a full shadow run (a source of up to 500 records, or `heal.shadow_max_items: all`), then, on the pages it read under the new layout (the whole source along its next-page link, up to `max_pages`):
 
 - it found at least 90% of the records the last good run had;
 - on every record both runs have, every **stable** field reads exactly the last good run's value;
@@ -151,7 +157,7 @@ The same checks run whether the repair is promoted by `scrapemend promote` or au
 - **Records the last good run didn't have.** Only their required fields and small value sets are checked. A plausible but wrong value on a new record passes.
 - **Records the shadow run didn't find.** Up to 10% of the last good run's records may be missing (removed from the site, or missed by the repair), and those aren't compared.
 - **Volatile fields wrong on a few records.** Up to 10% may read another value, because prices and statuses do change. A volatile field that is wrong on fewer than 10% of records, without becoming empty, passes.
-- **A sample, when `heal.shadow_max_items` is set.** Only the records drawn are compared. A stable field wrong on a share *p* of records is caught with probability 1 − (1 − *p*)ⁿ for *n* records drawn: the last-word location (12 of 200) with 50 records drawn, about 95% of the time. A volatile field's changed share is estimated from the sample.
+- **A sample, for a source with more records than `heal.shadow_max_items` (default 500).** Only the records drawn are compared. A stable field wrong on a share *p* of records is caught with probability 1 − (1 − *p*)ⁿ for *n* records drawn. With the default 500, a field wrong on 1% of records is caught 99.3% of the time, on 0.5% about 92%, and on 0.1% only about 39%; the last-word location (12 of 200) with 50 records drawn, about 95% of the time. A volatile field's changed share is estimated from the sample. Set `all` where a field wrong on a few records matters more than the requests.
 - **Changes after the verification.** `promote` verifies again on the pages `heal` stored, not on the site as it is now. A redesign in between isn't seen until the next run.
 - **Pagination past `max_pages`**, and **custom strategies sharing an element**: the shared-element check needs to know which element a strategy read, which a custom strategy only says if it has a `locate(doc)` method.
 

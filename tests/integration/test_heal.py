@@ -885,6 +885,32 @@ def test_cli_quarantine_heal_diff_promote_rollback(world: World, tmp_path: Path)
     assert back.exit_code == 0 and "v1 (file) is active again" in back.output
 
 
+def test_cli_says_what_the_shadow_run_will_read_before_it_starts(
+    world: World, tmp_path: Path
+) -> None:
+    # The failed run stored listing page 1 and 3 probed detail pages; the quick checks
+    # added listing pages 2 and 3, and 17 detail pages (anchors and sample).
+    world.layout(2)
+    repair = ["--patch", str(REPAIRS / "demo-v2.yaml")]
+    ran = cli_run(world, "run", "--out", str(tmp_path / "out.jsonl"), *repair)
+    assert ran.exit_code == 3, ran.output
+    plan = (
+        "heal: shadow run: the whole source, all 200 of the last good run's records: about "
+        "187 requests (10 listing pages and 200 detail pages, 23 of them stored), at least 9s "
+        "at 20 requests a second"
+    )
+    out = ran.output
+    assert out.index("status: layout_changed") < out.index(plan) < out.index("heal: proposed")
+    assert out.count("heal: shadow run:") == 1
+    # Verified again on the pages heal stored: nothing to fetch.
+    promoted = cli_run(world, "promote", "1")
+    assert promoted.exit_code == 0, promoted.output
+    assert (
+        "promote: shadow run: the whole source, all 200 of the last good run's records: every "
+        "page it reads is stored, so no requests"
+    ) in promoted.output
+
+
 def test_cli_promote_verifies_the_proposal_again(world: World) -> None:
     # A proposal stored as accepted by an earlier, weaker gate: status reading the
     # category (review attack 1b) passed when volatile fields only had to be present.

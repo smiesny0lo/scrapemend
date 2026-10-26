@@ -31,7 +31,7 @@ from scrapemend.heal.context import RepairContext, examples, prune_document, spe
 from scrapemend.heal.pages import Pages, PageSource
 from scrapemend.heal.proposals import Proposal
 from scrapemend.heal.providers import ProviderError, RepairProvider
-from scrapemend.heal.verify import Check, FieldCheck, VerificationReport, verify
+from scrapemend.heal.verify import Check, FieldCheck, ShadowPlan, VerificationReport, verify
 from scrapemend.pipeline import ValidatedRecord
 from scrapemend.runner import run_source
 from scrapemend.runs import RunReport
@@ -75,11 +75,13 @@ def heal(
     mode: Literal["propose", "auto"] | None = None,
     attempts: int = DEFAULT_ATTEMPTS,
     notifier: Notifier | None = None,
+    on_shadow: Callable[[ShadowPlan], None] | None = None,
 ) -> HealOutcome:
     """Try to repair the failure of a run (by default the source's latest run).
 
     `spec` is the active spec version (possibly with a runtime --start override);
     `mode` defaults to the spec's heal.mode, with "off" treated as "propose".
+    `on_shadow` is told what each shadow run will read, before it starts.
     """
     failed = state.runs.get(run_id) if run_id else state.runs.latest(spec.id)
     if failed is None or failed.source_id != spec.id:
@@ -139,6 +141,7 @@ def heal(
                 pages,
                 baseline=baseline.summary if baseline else None,
                 known=known,
+                on_shadow=on_shadow,
             )
         proposal = state.proposals.add(
             spec.id, spec.version, failed.run_id, provider.name, patch, report
@@ -183,7 +186,7 @@ def heal(
             snapshots, spec.id, failed.run_id, fetcher=fetcher, spec_version=spec.version
         )
         try:
-            version = promote(state, accepted, fresh)
+            version = promote(state, accepted, fresh, on_shadow=on_shadow)
         except PromotionRefused as e:
             reason = (
                 f"proposal {accepted.id} passed verification, but not again to be promoted: {e}"
@@ -230,7 +233,14 @@ class PromotionRefused(ValueError):
         self.report = report  # set when verifying it again failed
 
 
-def promote(state: State, proposal: Proposal, pages: Pages, *, force: bool = False) -> SpecVersion:
+def promote(
+    state: State,
+    proposal: Proposal,
+    pages: Pages,
+    *,
+    force: bool = False,
+    on_shadow: Callable[[ShadowPlan], None] | None = None,
+) -> SpecVersion:
     """Verify a proposal again and store it as the new active spec version.
 
     It is verified again against the current anchors on `pages` (the failed run's,
@@ -268,6 +278,7 @@ def promote(state: State, proposal: Proposal, pages: Pages, *, force: bool = Fal
         pages,
         baseline=baseline.summary if baseline else None,
         known=state.anchors.records(source_id),
+        on_shadow=on_shadow,
     )
     state.proposals.reverified(proposal.id, report)
     if report.verdict == "failed":
@@ -359,6 +370,9 @@ def run_and_heal(
     notifier: Notifier | None = None,
     attempts: int = DEFAULT_ATTEMPTS,
     rebase: Callable[[SourceSpec], SourceSpec] | None = None,
+    on_run: Callable[[RunReport], None] | None = None,
+    on_heal: Callable[[HealOutcome], None] | None = None,
+    on_shadow: Callable[[ShadowPlan], None] | None = None,
 ) -> tuple[RunReport, HealOutcome | None, RunReport | None]:
     """A run that heals itself as far as heal.mode allows.
 
@@ -366,11 +380,15 @@ def run_and_heal(
     runs; if it promotes a repair, the source is crawled again with the new
     version. Returns the first run, the healing outcome and the second run.
     `rebase` re-applies runtime overrides (like --start) to a newly promoted spec.
+    `on_run` and `on_heal` are told of each step as it ends, `on_shadow` of what a
+    shadow run will read before it starts: to report as it goes.
     """
     first = run_source(
         spec, fetcher, snapshots, state,
         limit=limit, keep_invalid=keep_invalid, on_record=on_record, notifier=notifier,
     )  # fmt: skip
+    if on_run is not None:
+        on_run(first)
     if first.status not in HEALABLE or spec.heal.mode == "off":
         return first, None, None
     outcome = heal(
@@ -382,7 +400,10 @@ def run_and_heal(
         run_id=first.run_id,
         notifier=notifier,
         attempts=attempts,
+        on_shadow=on_shadow,
     )
+    if on_heal is not None:
+        on_heal(outcome)
     if outcome.status != "promoted":
         return first, outcome, None
     active = state.specs.active(spec.id)
@@ -392,6 +413,8 @@ def run_and_heal(
         repaired, fetcher, snapshots, state,
         limit=limit, keep_invalid=keep_invalid, on_record=on_record, notifier=notifier,
     )  # fmt: skip
+    if on_run is not None:
+        on_run(second)
     return first, outcome, second
 
 

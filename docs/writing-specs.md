@@ -46,7 +46,7 @@ heal:
   threshold: 1.0
   volatile_match: 0.6
   volatile_change: 0.1
-  shadow_max_items: null  # null: the shadow run reads the whole source
+  shadow_max_items: 500   # all: the shadow run reads the whole source
 ```
 
 How a run works:
@@ -153,7 +153,7 @@ The other settings:
 - **`heal.threshold`** is the share of anchor values *every* stable field must reproduce for a repair to pass (default 1.0: all of them), and the share of the shadow run's records it must read exactly as the last good run did. Anchor pages that fail to load don't count against it.
 - **`heal.volatile_match`** is the same for volatile fields on the anchors (default 0.6): their values may have changed since the last good run, but most must still match.
 - **`heal.volatile_change`** is the share of the shadow run's records on which a volatile field's value may have changed (default 0.1). A value that became empty never counts as a change.
-- **`heal.shadow_max_items`** caps the records the shadow run reads, for a large source (default: none, the whole source; at least 20). It then reads a sample, drawn at random with a fixed seed from listing pages across the whole source, and catches a field wrong on a few records only with some probability.
+- **`heal.shadow_max_items`** caps the records the shadow run reads (default 500; at least 20). A source whose last good run had more is sampled: records drawn at random with a fixed seed from listing pages across the whole source. A sample catches a field wrong on a few records only with some probability (see [what the gate can't catch](verification.md#what-it-cant-catch)). `all` reads the whole source, however large, at the cost of about one request per page; the demo specs use it. Before the shadow run starts, `heal` says how many records it will compare and about how many requests that takes.
 
 A repair can't change any of these settings. [Verification](verification.md) explains each check, and what it can't catch.
 

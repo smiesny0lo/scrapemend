@@ -35,6 +35,10 @@ class Pages(Protocol):
         """Why a page that was asked for didn't load; None if it loaded."""
         ...
 
+    def stored(self, kind: SnapshotKind) -> set[str]:
+        """The URLs of the pages of a kind at hand without a request."""
+        ...
+
 
 class PageSource:
     """The pages a run stored, plus live fetches (politely, through the given fetcher)
@@ -92,6 +96,9 @@ class PageSource:
 
     def failure(self, url: str) -> PageFailure | None:
         return self._failures.get(url)
+
+    def stored(self, kind: SnapshotKind) -> set[str]:
+        return {url for stored_kind, url in self._stored if stored_kind == kind}
 
     def _load(self, kind: SnapshotKind, url: str) -> Document | None:
         if url in self._failures:

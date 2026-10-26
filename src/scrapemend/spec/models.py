@@ -268,9 +268,16 @@ class HealSpec(_Model):
     # The shadow run: the share of records a volatile field's value may have changed
     # on since the last good run. A value that became empty never counts as a change.
     volatile_change: float = Field(default=0.1, ge=0, le=1)
-    # None: the shadow run reads the whole source. A number caps the records it reads,
-    # drawn at random (with a fixed seed) from listing pages across the whole source.
-    shadow_max_items: int | None = Field(default=None, ge=20)
+    # The records the shadow run reads at most: drawn at random (with a fixed seed)
+    # from listing pages across the whole source, when it has more. `all` reads the
+    # whole source.
+    shadow_max_items: Annotated[int, Field(ge=20)] | Literal["all"] = 500
+
+    @field_validator("shadow_max_items", mode="before")
+    @classmethod
+    def _null_is_all(cls, value: Any) -> Any:
+        # Before `all`, null meant the whole source: a spec stored then keeps its meaning.
+        return "all" if value is None else value
 
 
 # --- source ---------------------------------------------------------------------------

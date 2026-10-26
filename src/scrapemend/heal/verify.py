@@ -43,9 +43,11 @@ with the last good run's, by key:
 - a field with a small set of values must mostly read values from that set, and
   required fields must be filled on records the last good run didn't have.
 
-With heal.shadow_max_items, the shadow run reads a sample instead: listing pages
-drawn at random (with a fixed seed) from the last good run's, the same pages'
-item counts compared, and records drawn at random from their items.
+When the last good run had more records than heal.shadow_max_items (500 unless
+it is `all`), the shadow run reads a sample instead: listing pages drawn at random
+(with a fixed seed) from the last good run's, the same pages' item counts
+compared, and records drawn at random from their items. Before it starts, it says
+what it will read and about how many requests that takes (`on_shadow`).
 
 Every check ends passed, failed or not run, with the reason. A candidate is accepted
 only if every check passed. One that failed a check is rejected. One where a check
@@ -57,7 +59,7 @@ unverified: fail closed. It is never promoted automatically, and only `promote
 import math
 import random
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from itertools import combinations
 from typing import Literal
 
@@ -76,7 +78,7 @@ from scrapemend.heal.anchors import (
     rank,
 )
 from scrapemend.heal.pages import Pages
-from scrapemend.pipeline import RunSummary
+from scrapemend.pipeline import ListingPage, RunSummary
 from scrapemend.spec import RegexSpec, SourceSpec
 
 MIN_ANCHORS = 3  # anchor pages that must load for a verdict (all of them, if fewer)
@@ -150,6 +152,20 @@ class ShadowRun(BaseModel):
     fields: dict[str, ShadowField] = Field(default_factory=dict)
 
 
+class ShadowPlan(BaseModel):
+    """What a shadow run is about to read, said before it starts: an estimate from the
+    last good run's counts and the pages already stored."""
+
+    scope: Literal["full", "sample"]
+    records: int  # the last good run's records it means to compare
+    known: int  # the last good run's records
+    listing_pages: int  # listing pages to read: as many as the last good run's, or drawn
+    detail_pages: int  # detail pages to read (none without item.follow)
+    stored: int  # of those pages, the ones at hand already
+    requests: int  # the others: about one request each
+    rps: float  # the spec's rate limit, requests a second
+
+
 class Check(BaseModel):
     """One step of the gate. `reason` says what it covered, or why it didn't run."""
 
@@ -219,9 +235,11 @@ def verify(
     threshold: float | None = None,
     baseline: RunSummary | None = None,
     known: KnownRecords | None = None,
+    on_shadow: Callable[[ShadowPlan], None] | None = None,
 ) -> VerificationReport:
     """`known` holds the values of the last good run's records, by key (see
-    AnchorStore.records): what the shadow run is compared with."""
+    AnchorStore.records): what the shadow run is compared with. `on_shadow` is told
+    what the shadow run will read, before it starts."""
     threshold = spec.heal.threshold if threshold is None else threshold
     volatile_match = spec.heal.volatile_match
     extractor = Extractor(spec.fields)
@@ -331,7 +349,7 @@ def verify(
         shadow_check = _check("shadow run", [], "skipped: no listing page to start from", "")
     else:
         shadow, problems, unavailable = _shadow(
-            spec, pages, extractor, first, known or {}, baseline, threshold
+            spec, pages, extractor, first, known or {}, baseline, threshold, on_shadow
         )
         shadow_check = _check("shadow run", problems, unavailable, _covered(shadow))
 
@@ -668,14 +686,20 @@ def _shadow(
     known: KnownRecords,
     baseline: RunSummary | None,
     threshold: float,
+    on_shadow: Callable[[ShadowPlan], None] | None = None,
 ) -> tuple[ShadowRun, list[str], str | None]:
     """Crawl the source with the candidate and compare its records with the last good
     run's. Returns what it found, the problems, and why it couldn't run, if it couldn't."""
-    cap = spec.heal.shadow_max_items
+    limit = spec.heal.shadow_max_items
+    cap = limit if isinstance(limit, int) else None  # all: the whole source
     sampled = cap is not None and len(known) > cap
     run = ShadowRun(scope="sample" if sampled else "full", known=len(known))
     if not known:
         return run, [], "the last good run's records are not stored"
+    if on_shadow is not None:
+        plan = _plan(spec, pages, known, baseline, cap if sampled else None)
+        if plan is not None:
+            on_shadow(plan)
     crawl = _Crawl(spec, pages, extractor, run)
     comparison = _Comparison(spec, known, baseline, run)
     records = crawl.sample(cap, baseline) if cap is not None and sampled else crawl.all(first)
@@ -685,7 +709,13 @@ def _shadow(
         # Stopped short: what it compared may still prove the candidate wrong.
         most = crawl.drawn if sampled else len(known)
         problems = comparison.problems(threshold, spec.heal.volatile_change, out_of=most)
-        return run, crawl.problems + problems, crawl.unavailable
+        stopped = crawl.unavailable
+        if run.listing_pages:
+            stopped += (
+                f"; it compared {run.compared} of the last good run's {len(known)} records "
+                "before it stopped"
+            )
+        return run, crawl.problems + problems, stopped
 
     problems = crawl.problems
     if sampled:
@@ -706,6 +736,69 @@ def _shadow(
     if not problems and run.compared < needed:
         return run, [], f"only {run.compared} records can be compared (needs {needed})"
     return run, problems, None
+
+
+def _plan(
+    spec: SourceSpec,
+    pages: Pages,
+    known: KnownRecords,
+    baseline: RunSummary | None,
+    cap: int | None,
+) -> ShadowPlan | None:
+    """What the shadow run will read, for a sample of `cap` records or the whole
+    source: as many pages as the last good run read, less the pages stored. Which
+    records a sample draws is known only once its listing pages are read: if they
+    are all stored, it is counted exactly (as when promote verifies again);
+    otherwise its detail pages are counted as not stored. None if it can't start."""
+    follow = spec.item.follow is not None
+    listings, details = pages.stored("listing"), pages.stored("detail") if follow else set()
+    if cap is None:
+        paginate = spec.fetch.paginate
+        most = paginate.max_pages if paginate else 1
+        listing_pages = max(1, min(baseline.listing_pages if baseline else 1, most))
+        records = len(known)
+        detail_pages = records if follow else 0
+        stored = min(len(listings), listing_pages) + min(len(details), detail_pages)
+    else:
+        recorded = baseline.listings if baseline is not None else []
+        if not recorded:
+            return None
+        drawn = [recorded[i] for i in _draw(spec, recorded, cap)]
+        listing_pages = len(drawn)
+        stored = sum(page.url in listings for page in drawn)
+        docs = [pages.listing(page.url) for page in drawn] if stored == len(drawn) else []
+        if docs and all(doc is not None for doc in docs):
+            keys = [key for doc in docs if doc is not None for key, _ in _items(spec, doc)]
+            chosen = _choose((key for key in keys if key is not None), cap)
+            records = len(chosen)
+            stored += sum(key in details for key in chosen)
+        else:
+            records = min(cap, sum(page.items for page in drawn))
+        detail_pages = records if follow else 0
+    return ShadowPlan(
+        scope="full" if cap is None else "sample",
+        records=records,
+        known=len(known),
+        listing_pages=listing_pages,
+        detail_pages=detail_pages,
+        stored=stored,
+        requests=listing_pages + detail_pages - stored,
+        rps=spec.fetch.rate.rps,
+    )
+
+
+def _draw(spec: SourceSpec, listings: list[ListingPage], cap: int) -> list[int]:
+    """The listing pages a sample reads, by their place among the last good run's:
+    as many as hold about twice `cap` items, at random with a fixed seed."""
+    per_page = sum(p.items for p in listings) / len(listings)
+    count = min(len(listings), math.ceil(2 * cap / max(per_page, 1.0)))
+    return sorted(random.Random(f"{SHADOW_SEED}:{spec.id}").sample(range(len(listings)), count))
+
+
+def _choose(keys: Iterable[str], cap: int) -> list[str]:
+    """The records a sample reads from the items of the listing pages drawn: `cap` of
+    them, at random with a fixed seed."""
+    return sorted(dict.fromkeys(keys), key=lambda key: rank(key, SHADOW_SEED))[:cap]
 
 
 class _Crawl:
@@ -749,14 +842,10 @@ class _Crawl:
         if not listings:
             self.unavailable = (
                 "the last good run's listing pages are not recorded, so none can be drawn; "
-                "set heal.shadow_max_items to null to read the whole source"
+                "set heal.shadow_max_items to all to read the whole source"
             )
             return
-        per_page = sum(p.items for p in listings) / len(listings)
-        count = min(len(listings), math.ceil(2 * cap / max(per_page, 1.0)))
-        drawn = sorted(
-            random.Random(f"{SHADOW_SEED}:{self.spec.id}").sample(range(len(listings)), count)
-        )
+        drawn = _draw(self.spec, listings, cap)
         pool: dict[str, Document] = {}
         old = found = 0
         for index in drawn:
@@ -773,10 +862,10 @@ class _Crawl:
                     pool.setdefault(key, item)
         if found < MIN_COVERAGE * old:
             self.problems.append(
-                f"the item container finds {found} items on {count} sampled listing pages, "
-                f"where the last good run found {old} (needs {MIN_COVERAGE:.0%})"
+                f"the item container finds {found} items on {len(drawn)} sampled listing "
+                f"pages, where the last good run found {old} (needs {MIN_COVERAGE:.0%})"
             )
-        chosen = sorted(pool, key=lambda key: rank(key, SHADOW_SEED))[:cap]
+        chosen = _choose(pool, cap)
         self.drawn = len(chosen)
         for key in chosen:
             record = self._record(key, pool[key])

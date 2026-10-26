@@ -4,7 +4,7 @@ import difflib
 import io
 import json
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
@@ -31,6 +31,7 @@ from scrapemend.heal.ladder import (
 )
 from scrapemend.heal.pages import PageSource
 from scrapemend.heal.providers import PatchProvider, ProviderError, RepairProvider, make_provider
+from scrapemend.heal.verify import ShadowPlan
 from scrapemend.pipeline import ValidatedRecord
 from scrapemend.runner import DriftNotAccepted, accept_drift, run_source
 from scrapemend.runs import RunReport
@@ -181,7 +182,7 @@ def run(
     store = FilesystemSnapshotStore(snapshots)
     try:
         with _fetcher(source, user_agent) as fetcher, _interruptible():
-            first, outcome, second = run_and_heal(
+            first, _, second = run_and_heal(
                 source,
                 state,
                 store,
@@ -192,12 +193,10 @@ def run(
                 limit=limit,
                 notifier=_notifier(notify),
                 rebase=lambda s: _with_start(s, start),
+                on_run=lambda report: _print_report(report, fetcher, snapshots),
+                on_heal=_print_heal,
+                on_shadow=_print_plan("heal"),
             )
-            _print_report(first, fetcher, snapshots)
-            if outcome is not None:
-                _print_heal(outcome)
-            if second is not None:
-                _print_report(second, fetcher, snapshots)
     finally:
         if out:
             output.close()
@@ -268,6 +267,7 @@ def heal_command(
             mode=mode,
             attempts=attempts,
             notifier=_notifier(notify),
+            on_shadow=_print_plan("heal"),
         )
     _print_heal(outcome)
     if outcome.status == "quarantined":
@@ -372,7 +372,7 @@ def promote_command(
             store, source_id, found.run_id, fetcher=fetcher, spec_version=found.base_version
         )
         try:
-            version = promote(state, found, pages, force=force)
+            version = promote(state, found, pages, force=force, on_shadow=_print_plan("promote"))
         except PromotionRefused as e:
             _fail(str(e), 1 if e.report is None else 3)
     verified = state.proposals.get(proposal)
@@ -586,6 +586,44 @@ def _json_value(value: object) -> str:
     if isinstance(value, date):
         return value.isoformat()
     raise TypeError(f"cannot serialize {type(value).__name__}")
+
+
+def _print_plan(step: str) -> Callable[[ShadowPlan], None]:
+    """Says what a shadow run will read before it starts, so a long one can be stopped."""
+
+    def say(plan: ShadowPlan) -> None:
+        typer.echo(f"{step}: shadow run: {_plan(plan)}", err=True)
+
+    return say
+
+
+def _plan(plan: ShadowPlan) -> str:
+    if plan.scope == "full":
+        what = f"the whole source, all {plan.known} of the last good run's records"
+    else:
+        what = (
+            f"a sample of {plan.records} of the last good run's {plan.known} records, from "
+            f"{plan.listing_pages} listing pages drawn"
+        )
+    if not plan.requests:
+        return f"{what}: every page it reads is stored, so no requests"
+    pages = f"{plan.listing_pages} listing pages"
+    if plan.detail_pages:
+        pages += f" and {plan.detail_pages} detail pages"
+    rate = f"{plan.rps:g} request{'' if plan.rps == 1 else 's'} a second"
+    return (
+        f"{what}: about {plan.requests} requests ({pages}, {plan.stored} of them stored), "
+        f"at least {_duration(plan.requests / plan.rps)} at {rate}"
+    )
+
+
+def _duration(seconds: float) -> str:
+    whole = round(seconds)
+    if whole < 60:
+        return f"{whole}s"
+    if whole < 3600:
+        return f"{whole // 60}m{whole % 60:02d}s"
+    return f"{whole // 3600}h{whole % 3600 // 60:02d}m"
 
 
 def _print_heal(outcome: HealOutcome) -> None:

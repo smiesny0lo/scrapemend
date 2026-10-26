@@ -32,6 +32,9 @@ It starts a local demo site and scrapes it, then redesigns the site underneath t
     11% similar, listing pages 14% similar to the last good run). On 3 known detail pages:
     broken: title, category, location, published, status, description;
     only via fallbacks: reference, authority, deadline, value
+  heal: shadow run: the whole source, all 200 of the last good run's records: about 187
+    requests (10 listing pages and 200 detail pages, 23 of them stored), at least 9s at 20
+    requests a second
   heal: proposed: proposal 1 passed verification (heal.mode is propose)
     proposal 1 (patch:demo-v2.yaml, confidence 0.90): passed
       passed   regexes: 1 regex: 1 on Python's re (at most 1s a search)

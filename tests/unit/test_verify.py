@@ -8,8 +8,9 @@ import pytest
 from scrapemend.extract import Document, patterns
 from scrapemend.heal.anchors import Anchor
 from scrapemend.heal.pages import PageFailure
-from scrapemend.heal.verify import VerificationReport, verify
-from scrapemend.pipeline import FieldStats, RunSummary
+from scrapemend.heal.verify import ShadowPlan, VerificationReport, verify
+from scrapemend.pipeline import FieldStats, ListingPage, RunSummary
+from scrapemend.snapshots import SnapshotKind
 from scrapemend.spec import SourceSpec
 from scrapemend.spec.models import HealSpec, ItemSpec
 
@@ -57,7 +58,8 @@ MORE = {
 
 class FakePages:
     """Pages under the new layout. A page that isn't there answers 404; one listed in
-    `unreachable` can't be fetched at all (a timeout, the site failing)."""
+    `unreachable` can't be fetched at all (a timeout, the site failing). `stored`:
+    the pages a real PageSource would have at hand without a request."""
 
     def __init__(
         self,
@@ -65,11 +67,13 @@ class FakePages:
         listing: str | None = None,
         more: dict[str, str] = MORE,
         unreachable: Iterable[str] = (),
+        stored: dict[SnapshotKind, set[str]] | None = None,
     ) -> None:
         self.details = details
         self.first = listing
         self.more = more
         self.unreachable = set(unreachable)
+        self._stored = stored or {}
         self.requested: list[str] = []  # detail pages, every time one is asked for
         self.listings: list[str] = []  # listing pages, the first time each is asked for
         self._listing_docs: dict[str, Document | None] = {}
@@ -88,6 +92,9 @@ class FakePages:
         self.requested.append(url)
         html = None if url in self.unreachable else self.details.get(url)
         return Document.parse(html, url=url) if html is not None else None
+
+    def stored(self, kind: SnapshotKind) -> set[str]:
+        return self._stored.get(kind, set())
 
     def failure(self, url: str) -> PageFailure | None:
         if url in self.unreachable:
@@ -441,7 +448,8 @@ def test_a_detail_page_that_cannot_be_fetched_stops_the_shadow_run() -> None:
     report = run(spec(), FakePages(DETAILS, listing_for(URLS), unreachable={unreachable}))
     assert report.verdict == "not run"
     assert not_run(report) == {
-        "shadow run": f"{unreachable} could not be loaded (HTTP 503 after 4 attempts)"
+        "shadow run": f"{unreachable} could not be loaded (HTTP 503 after 4 attempts); it "
+        "compared 25 of the last good run's 50 records before it stopped"
     }
 
 
@@ -480,7 +488,8 @@ def test_a_listing_page_that_cannot_be_fetched_stops_the_shadow_run() -> None:
     }
     report = run(spec(), FakePages(DETAILS, listing_for(URLS), more, unreachable={page_4}))
     assert not_run(report) == {
-        "shadow run": f"listing page 4 could not be loaded (HTTP 503 after 4 attempts): {page_4}"
+        "shadow run": f"listing page 4 could not be loaded (HTTP 503 after 4 attempts): {page_4}; "
+        "it compared 50 of the last good run's 50 records before it stopped"
     }
 
 
@@ -504,8 +513,124 @@ def test_a_sample_needs_the_last_good_runs_listing_pages() -> None:
     report = run(sampled)  # BASELINE predates RunSummary.listings
     assert not_run(report) == {
         "shadow run": "the last good run's listing pages are not recorded, so none can be "
-        "drawn; set heal.shadow_max_items to null to read the whole source"
+        "drawn; set heal.shadow_max_items to all to read the whole source"
     }
+
+
+# Every listing page of the source as the last good run recorded it, to sample from.
+LISTINGS = BASELINE.model_copy(
+    update={
+        "listing_pages": 3,
+        "listings": [
+            ListingPage(url=f"{BASE}/list", items=30),
+            ListingPage(url=f"{BASE}/list?page=2", items=10),
+            ListingPage(url=f"{BASE}/list?page=3", items=10),
+        ],
+    }
+)
+
+
+def sampling(cap: int | str) -> SourceSpec:
+    data = spec().model_dump(mode="json")
+    data["heal"]["shadow_max_items"] = cap
+    return SourceSpec.model_validate(data)
+
+
+def test_all_reads_the_whole_source_however_many_records() -> None:
+    def pages() -> FakePages:  # page 1 too, by its URL, as a sample reads it
+        return FakePages(DETAILS, listing_for(URLS), MORE | {f"{BASE}/list": listing_for(URLS)})
+
+    capped = run(sampling(20), pages(), baseline=LISTINGS)
+    assert capped.accepted, capped.problems
+    shadow = capped.shadow
+    assert (shadow.scope, shadow.records, shadow.compared) == ("sample", 20, 20)
+    whole = run(sampling("all"), pages(), baseline=LISTINGS)
+    assert whole.accepted, whole.problems
+    shadow = whole.shadow
+    assert (shadow.scope, shadow.records, shadow.compared) == ("full", 50, 50)
+
+
+def test_by_default_a_source_of_more_than_500_records_is_sampled() -> None:
+    details = page_set(600)
+    urls = list(details)
+    listings = {
+        f"{BASE}/list" + (f"?page={n + 1}" if n else ""): listing_for(
+            urls[30 * n : 30 * (n + 1)], f"?page={n + 2}" if n < 19 else None
+        )
+        for n in range(20)
+    }
+    baseline = BASELINE.model_copy(
+        update={
+            "listing_pages": 20,
+            "listings": [ListingPage(url=url, items=30) for url in listings],
+        }
+    )
+    kwargs: dict[str, Any] = {
+        "anchors": anchors_for(details, urls[:10]),
+        "baseline": baseline,
+        "known": {a.key: a.values for a in anchors_for(details, urls)},
+    }
+    default = run(spec(), FakePages(details, listings[f"{BASE}/list"], listings), **kwargs)
+    assert default.accepted, default.problems
+    assert (default.shadow.scope, default.shadow.compared) == ("sample", 500)
+    whole = run(sampling("all"), FakePages(details, listings[f"{BASE}/list"], listings), **kwargs)
+    assert whole.accepted, whole.problems
+    assert (whole.shadow.scope, whole.shadow.compared) == ("full", 600)
+
+
+def test_the_shadow_run_says_what_it_will_read_before_it_starts() -> None:
+    # The failed run stored listing pages 1 to 3 and 20 detail pages (the quick
+    # checks'); the last good run read 5 listing pages and 50 records.
+    stored: dict[SnapshotKind, set[str]] = {
+        "listing": {f"{BASE}/list", *MORE},
+        "detail": set(URLS[:20]),
+    }
+    pages = FakePages(DETAILS, listing_for(URLS), stored=stored)
+    told: list[tuple[ShadowPlan, int]] = []
+    report = run(spec(), pages, on_shadow=lambda plan: told.append((plan, len(pages.requested))))
+    assert report.accepted, report.problems
+    [(plan, requested)] = told
+    assert requested == 20  # the anchors' and the sample's pages: no crawl yet
+    assert plan == ShadowPlan(
+        scope="full",
+        records=50,
+        known=50,
+        listing_pages=5,
+        detail_pages=50,
+        stored=23,
+        requests=32,
+        rps=1.0,
+    )
+    assert len(pages.requested) == 20 + 50
+
+
+def test_a_sampled_shadow_run_says_what_it_will_read() -> None:
+    first = f"{BASE}/list"
+    more = MORE | {first: listing_for(URLS)}
+    # The first heal: only page 1 is stored of the 3 listing pages drawn, so none of
+    # the 20 detail pages drawn can be known to be stored.
+    told: list[ShadowPlan] = []
+    stored: dict[SnapshotKind, set[str]] = {"listing": {first}, "detail": set(URLS[:20])}
+    pages = FakePages(DETAILS, listing_for(URLS), more, stored=stored)
+    report = run(sampling(20), pages, baseline=LISTINGS, on_shadow=told.append)
+    assert report.accepted, report.problems
+    plan = ShadowPlan(
+        scope="sample",
+        records=20,
+        known=50,
+        listing_pages=3,
+        detail_pages=20,
+        stored=1,
+        requests=22,
+        rps=1.0,
+    )
+    assert told == [plan]
+    # Verified again, as promote does: every page the sample reads is stored by now.
+    stored = {"listing": set(more), "detail": set(DETAILS)}
+    pages = FakePages(DETAILS, listing_for(URLS), more, stored=stored)
+    report = run(sampling(20), pages, baseline=LISTINGS, on_shadow=told.append)
+    assert report.accepted, report.problems
+    assert told[1] == plan.model_copy(update={"stored": 23, "requests": 0})
 
 
 def test_a_failed_check_is_not_hidden_by_one_that_did_not_run() -> None:

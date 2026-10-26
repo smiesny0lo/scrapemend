@@ -79,6 +79,7 @@ scrapemend heal examples/sources/demo.yaml --provider anthropic
 Either way, the repair goes through the verification gate before anything changes:
 
 ```
+heal: shadow run: the whole source, all 200 of the last good run's records: about 187 requests (10 listing pages and 200 detail pages, 23 of them stored), at least 9s at 20 requests a second
 heal: proposed: proposal 1 passed verification (heal.mode is propose); promote it with: scrapemend promote <spec> 1
   proposal 1 (patch:demo-v2.yaml, confidence 0.90): passed
     passed   regexes: 1 regex: 1 on Python's re (at most 1s a search)
@@ -89,7 +90,7 @@ heal: proposed: proposal 1 passed verification (heal.mode is propose); promote i
     passed   shadow run: the whole source: 10 listing pages, 200 records; all 200 of the last good run's records compared
 ```
 
-Every field reproduced the known values on all 10 anchor pages, and the next-page link led through three listing pages of new notices. Then the **shadow run**: the repaired spec crawled the whole site, about 200 requests at the spec's rate limit, and read every one of the 200 notices exactly as the good run had. The pages it fetched are stored, so `promote` needs none of them again.
+Every field reproduced the known values on all 10 anchor pages, and the next-page link led through three listing pages of new notices. Then the **shadow run**, which said before it started what it would read: the repaired spec crawled the whole site (`shadow_max_items: all` in the demo spec), 187 requests at the spec's rate limit for the pages not stored yet, and read every one of the 200 notices exactly as the good run had. The pages it fetched are stored, so `promote` needs none of them again.
 
 To see a rejection, try a repair that maps one field wrongly:
 
