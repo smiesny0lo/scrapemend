@@ -1,0 +1,51 @@
+# Review attack A3 on layout v2: value is fitted to the first example shown to a
+# provider (EUR 21,400.00): a regex for exactly five digits. It is right on
+# five-digit amounts only, wrong on 102 of 200 notices.
+rationale: 'v2: amounts look like 21,400.00'
+confidence: 0.9
+container:
+  css: table.tender-table tr.tender-row
+follow:
+  css: a.tender-link::attr(href)
+next_page:
+  css: a[rel=next]::attr(href)
+fields:
+  reference:
+    strategies:
+    - css: dd.tender__ref
+    - label: Reference
+  title:
+    strategies:
+    - css: h1.tender__title
+  authority:
+    strategies:
+    - css: dd.tender__buyer
+    - label: Contracting authority
+  category:
+    strategies:
+    - css: dd.tender__category
+    - label: Category
+  location:
+    strategies:
+    - css: dd.tender__location
+    - label: Location
+  published:
+    strategies:
+    - css: dd.tender__published
+    - label: Published
+  deadline:
+    strategies:
+    - css: dd.tender__closing
+    - label: Deadline
+  value:
+    strategies:
+    - regex: (\d{2},\d{3}\.\d{2})
+      within:
+        css: dd.tender__amount
+  status:
+    strategies:
+    - css: dd.tender__status
+    - label: Status
+  description:
+    strategies:
+    - css: div.tender__description p

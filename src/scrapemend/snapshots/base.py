@@ -75,6 +75,10 @@ class SnapshotStore(Protocol):
         """Snapshot ids of one run, in the order they were stored."""
         ...
 
+    def delete_run(self, source_id: str, run_id: str) -> None:
+        """Delete every snapshot of one run (nothing, if it has none)."""
+        ...
+
 
 # --- decoding ----------------------------------------------------------------------------
 

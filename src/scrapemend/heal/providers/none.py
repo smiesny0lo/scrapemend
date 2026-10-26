@@ -14,7 +14,10 @@ class NoneProvider:
 
 class PatchProvider:
     """Proposes one given patch, e.g. a repair written by hand, so it goes through the
-    same verification gate as any other."""
+    same verification gate as any other. Being written by hand, its regexes keep
+    Python's re, with a time limit; every other provider's run on RE2."""
+
+    hand_written = True
 
     def __init__(self, patch: SpecPatch, name: str = "patch") -> None:
         self.patch = patch

@@ -4,7 +4,7 @@ import difflib
 import io
 import json
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
@@ -14,12 +14,18 @@ from typing import Annotated, Literal, NoReturn
 import typer
 from pydantic import ValidationError
 
-from scrapemend import __version__
+from scrapemend import __version__, retention
 from scrapemend.detect.classify import Status
 from scrapemend.events import Notifier, Notifiers, make_notifier
 from scrapemend.extract import Extractor
 from scrapemend.extract.strategies import UnknownStrategy
-from scrapemend.fetch import DEFAULT_USER_AGENT, HttpFetcher
+from scrapemend.fetch import (
+    DEFAULT_USER_AGENT,
+    BlockedError,
+    HttpFetcher,
+    Requests,
+    RobotsDisallowed,
+)
 from scrapemend.heal.context import spec_yaml
 from scrapemend.heal.ladder import (
     HealOutcome,
@@ -31,8 +37,9 @@ from scrapemend.heal.ladder import (
 )
 from scrapemend.heal.pages import PageSource
 from scrapemend.heal.providers import PatchProvider, ProviderError, RepairProvider, make_provider
+from scrapemend.heal.verify import ShadowPlan, VerificationReport
 from scrapemend.pipeline import ValidatedRecord
-from scrapemend.runner import run_source
+from scrapemend.runner import ConfirmRefused, DriftNotAccepted, accept_drift, confirm, run_source
 from scrapemend.runs import RunReport
 from scrapemend.snapshots import FilesystemSnapshotStore
 from scrapemend.spec import SourceSpec, SpecError, load_patch, load_spec
@@ -160,8 +167,9 @@ def run(
     """Scrape a source with its active spec version, write one JSON record per line,
     judge the run, and heal as far as the spec's heal.mode allows.
 
-    A report goes to stderr. Exit codes: 0 good, 2 blocked or unreachable,
-    3 the data is broken (layout changed, nothing found, failing fields, quarantined).
+    A report goes to stderr. Exit codes: 0 good, 2 blocked or unreachable (healing
+    included), 3 the data is broken (layout changed, nothing found, failing fields,
+    quarantined).
     """
     state = State(db)
     active = _active(state, spec)
@@ -181,7 +189,7 @@ def run(
     store = FilesystemSnapshotStore(snapshots)
     try:
         with _fetcher(source, user_agent) as fetcher, _interruptible():
-            first, outcome, second = run_and_heal(
+            first, healing, second = run_and_heal(
                 source,
                 state,
                 store,
@@ -192,15 +200,15 @@ def run(
                 limit=limit,
                 notifier=_notifier(notify),
                 rebase=lambda s: _with_start(s, start),
+                on_run=lambda report: _print_report(report, snapshots),
+                on_heal=_print_heal,
+                on_shadow=_print_plan("heal"),
             )
-            _print_report(first, fetcher, snapshots)
-            if outcome is not None:
-                _print_heal(outcome)
-            if second is not None:
-                _print_report(second, fetcher, snapshots)
     finally:
         if out:
             output.close()
+    if healing is not None and healing.status == "blocked":
+        raise typer.Exit(2)  # the site refused us: more urgent than the broken data
     final = second or first
     raise typer.Exit(EXIT_CODES[final.status])
 
@@ -224,7 +232,7 @@ def check(
         report = run_source(
             source, fetcher, store, state, mode="check", limit=sample, notifier=_notifier(notify)
         )
-        _print_report(report, fetcher, snapshots)
+        _print_report(report, snapshots)
     raise typer.Exit(EXIT_CODES[report.status])
 
 
@@ -252,7 +260,8 @@ def heal_command(
     notify: NotifyOption = None,
 ) -> None:
     """Repair the latest failed run: get a patch, verify it on the current pages, and
-    promote it or leave it for `scrapemend promote` (exit 3 if nothing passed)."""
+    promote it or leave it for `scrapemend promote` (exit 3 if nothing passed, 2 if
+    the site refused us)."""
     state = State(db)
     source = _with_start(_active(state, spec).spec, start)
     repairer = _provider(provider, patch, model)
@@ -268,8 +277,11 @@ def heal_command(
             mode=mode,
             attempts=attempts,
             notifier=_notifier(notify),
+            on_shadow=_print_plan("heal"),
         )
     _print_heal(outcome)
+    if outcome.status == "blocked":
+        raise typer.Exit(2)
     if outcome.status == "quarantined":
         raise typer.Exit(3)
     if outcome.status == "skipped" and outcome.run_id is not None:
@@ -286,14 +298,14 @@ def proposals(spec: SpecArgument, db: DbOption = DEFAULT_DB) -> None:
         typer.echo("no proposals yet")
         return
     typer.echo(
-        "{:>4}  {:<9} {:>4} {:>5} {:>5}  {:<12} {}".format(
+        "{:>4}  {:<10} {:>4} {:>5} {:>5}  {:<12} {}".format(
             "ID", "STATUS", "BASE", "SCORE", "CONF", "PROVIDER", "CHANGES"
         )
     )
     for p in found:
         changes = ", ".join(p.patch.changes())
         typer.echo(
-            f"{p.id:>4}  {p.status:<9} v{p.base_version:<3} {p.report.score:>5.2f} "
+            f"{p.id:>4}  {p.status:<10} v{p.base_version:<3} {p.report.score:>5.2f} "
             f"{p.patch.confidence:>5.2f}  {p.provider:<12} {changes}"
         )
 
@@ -345,21 +357,24 @@ def promote_command(
     force: Annotated[
         bool,
         typer.Option(
-            help="Apply a proposal made for an older version to the active one (verified again)."
+            help="Promote even if a check could not run (never if one failed), and apply a "
+            "proposal made for an older version to the active one. Verified again either way."
         ),
     ] = False,
     db: DbOption = DEFAULT_DB,
     snapshots: SnapshotsOption = DEFAULT_SNAPSHOTS,
     user_agent: UserAgentOption = DEFAULT_USER_AGENT,
 ) -> None:
-    """Verify a proposal again and make it the active spec version (exit 3 if it no
-    longer passes). Pages are read from the failed run's snapshots where possible."""
+    """Verify a proposal again and make it the active spec version (exit 3 if a check
+    fails, or can't run without --force; 2 if the site refused us). Pages are read
+    from the failed run's snapshots where possible; a page that didn't load before is
+    fetched again."""
     state = State(db)
     source_id = _load(spec).id
     found = state.proposals.get(proposal)
     if found is None or found.source_id != source_id:
         _fail(f"{source_id} has no proposal {proposal}")
-    if found.status != "accepted":
+    if found.status not in ("accepted", "unverified"):
         _fail(f"proposal {proposal} is {found.status}: only verified proposals can be promoted")
     active = state.specs.active(source_id)
     if active is None:
@@ -370,15 +385,33 @@ def promote_command(
             store, source_id, found.run_id, fetcher=fetcher, spec_version=found.base_version
         )
         try:
-            version = promote(state, found, pages, force=force)
+            version = promote(
+                state,
+                found,
+                pages,
+                force=force,
+                on_shadow=_print_plan("promote"),
+                on_verified=_print_verified,  # before it is promoted, with --force too
+            )
         except PromotionRefused as e:
             _fail(str(e), 1 if e.report is None else 3)
+        except (BlockedError, RobotsDisallowed) as e:
+            _fail(
+                f"promote: blocked: the site refused us ({e}); nothing was promoted. "
+                "scrapemend never works around a block: find out why before you try again",
+                2,
+            )
     verified = state.proposals.get(proposal)
     assert verified is not None
     onto = f" (re-based onto v{active.version})" if found.base_version != active.version else ""
+    skipped = ", ".join(f"{c.name} ({c.reason})" for c in verified.report.not_run)
+    how = (
+        f"promoted with --force although these checks did not run: {skipped}"
+        if skipped
+        else "every check passed; promoted"
+    )
     typer.echo(
-        f"{source_id}: proposal {proposal}{onto} verified again "
-        f"(weakest field {verified.report.score:.0%} of anchors) and promoted; "
+        f"{source_id}: proposal {proposal}{onto} verified again; {how}; "
         f"v{version.version} is now active"
     )
 
@@ -413,7 +446,10 @@ def versions(spec: SpecArgument, db: DbOption = DEFAULT_DB) -> None:
     current = state.specs.state(source_id)
     for v in history:
         mark = "*" if current and v.version == current.active_version else " "
-        typer.echo(f"{mark} v{v.version:<3} {v.origin:<6} {v.created_at:%Y-%m-%d %H:%M}  {v.note}")
+        note = (
+            f"provisional (confirm it: scrapemend confirm); {v.note}" if v.provisional else v.note
+        )
+        typer.echo(f"{mark} v{v.version:<3} {v.origin:<6} {v.created_at:%Y-%m-%d %H:%M}  {note}")
     if current and current.quarantine_reason:
         typer.echo(f"quarantined: {current.quarantine_reason}")
 
@@ -432,6 +468,82 @@ def show(
         _fail(f"{source_id} has no version {version}" if version else "no versions yet")
     typer.echo(f"# {source_id} v{found.version} ({found.origin}): {found.note}")
     typer.echo(spec_yaml(found.spec).rstrip())
+
+
+@app.command(name="prune")
+def prune_command(
+    spec: SpecArgument,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Only say which runs' snapshots would go.")
+    ] = False,
+    db: DbOption = DEFAULT_DB,
+    snapshots: SnapshotsOption = DEFAULT_SNAPSHOTS,
+) -> None:
+    """Delete the snapshots of a source's older runs: all but the newest
+    snapshots.keep_runs, never those of the last good run, a proposal that can still
+    be promoted, or the last failed run. Every run does this when it ends, too."""
+    state = State(db)
+    source = _active(state, spec).spec
+    pruned = retention.prune(source, state, FilesystemSnapshotStore(snapshots), dry_run=dry_run)
+    keep = source.snapshots.keep_runs
+    newest = "the newest run" if keep == 1 else f"the newest {keep} runs"
+    typer.echo(
+        f"{source.id}: keeps the snapshots of {newest} (snapshots.keep_runs: {keep}) "
+        "and of older runs still needed"
+    )
+    label = "would delete" if dry_run else "deleted"
+    for run_id in pruned.deleted:
+        typer.echo(f"  {label:<12}  {run_id}")
+    if not pruned.deleted:
+        typer.echo("  nothing to delete")
+    for run_id, why in pruned.needed.items():
+        typer.echo(f"  {'kept':<12}  {run_id}: {why}")
+
+
+@app.command(name="accept-drift")
+def accept_drift_command(
+    run_id: Annotated[str, typer.Argument(help="A drift run whose data you checked.")],
+    db: DbOption = DEFAULT_DB,
+) -> None:
+    """Make a drift run the last good run, once you have checked that its data is
+    right: later runs and repairs are compared with it. Until then every run is
+    compared with the last good run before it, and keeps drifting and alerting."""
+    state = State(db)
+    try:
+        report = accept_drift(state, run_id)
+    except DriftNotAccepted as e:
+        _fail(str(e))
+    typer.echo(
+        f"{report.source_id}: drift run {run_id} accepted: later runs and repairs are "
+        f"compared with its {report.summary.valid_records} records"
+    )
+
+
+@app.command(name="confirm")
+def confirm_command(
+    spec: SpecArgument,
+    version: Annotated[int, typer.Argument(help="A version heal promoted automatically.")],
+    db: DbOption = DEFAULT_DB,
+) -> None:
+    """Confirm a spec version that heal promoted automatically, once you have checked
+    its data: its latest good run becomes the last good run, and later runs and
+    repairs are compared with it. Until then they are compared with the last good run
+    before the promotion."""
+    state = State(db)
+    source_id = _load(spec).id
+    try:
+        report = confirm(state, source_id, version)
+    except ConfirmRefused as e:
+        _fail(str(e))
+    if report is None:
+        typer.echo(
+            f"{source_id}: v{version} confirmed: its next good run becomes the last good run"
+        )
+        return
+    typer.echo(
+        f"{source_id}: v{version} confirmed: its run {report.run_id} is the last good run now, "
+        f"with its {report.summary.valid_records} records"
+    )
 
 
 @app.command()
@@ -562,26 +674,80 @@ def _json_value(value: object) -> str:
     raise TypeError(f"cannot serialize {type(value).__name__}")
 
 
+def _print_plan(step: str) -> Callable[[ShadowPlan], None]:
+    """Says what a shadow run will read before it starts, so a long one can be stopped."""
+
+    def say(plan: ShadowPlan) -> None:
+        typer.echo(f"{step}: shadow run: {_plan(plan)}", err=True)
+
+    return say
+
+
+def _plan(plan: ShadowPlan) -> str:
+    if plan.scope == "full":
+        what = f"the whole source, all {plan.known} of the last good run's records"
+    else:
+        what = (
+            f"every listing page, and the detail pages of a sample of {plan.records} records "
+            f"(the last good run had {plan.known})"
+        )
+    if not plan.requests:
+        return f"{what}: every page it reads is stored, so no requests"
+    pages = f"{plan.listing_pages} listing pages"
+    if plan.detail_pages:
+        pages += f" and {plan.detail_pages} detail pages"
+    rate = f"{plan.rps:g} request{'' if plan.rps == 1 else 's'} a second"
+    return (
+        f"{what}: about {plan.requests} requests ({pages}, {plan.stored} of them stored), "
+        f"at least {_duration(plan.requests / plan.rps)} at {rate}"
+    )
+
+
+def _duration(seconds: float) -> str:
+    whole = round(seconds)
+    if whole < 60:
+        return f"{whole}s"
+    if whole < 3600:
+        return f"{whole // 60}m{whole % 60:02d}s"
+    return f"{whole // 3600}h{whole % 3600 // 60:02d}m"
+
+
 def _print_heal(outcome: HealOutcome) -> None:
     def err(line: str) -> None:
         typer.echo(line, err=True)
 
     err(f"heal: {outcome.status}: {outcome.message}")
+    if outcome.requests is not None:
+        err(f"  {_requests(outcome.requests)}")
     for p in outcome.proposals:
-        verdict = "passed" if p.report.accepted else "rejected"
-        err(
-            f"  proposal {p.id} ({p.provider}, confidence {p.patch.confidence:.2f}): {verdict}, "
-            f"weakest field {p.report.score:.0%} of anchors, {p.report.sample} other pages checked"
-        )
+        confidence = f"confidence {p.patch.confidence:.2f}"
+        err(f"  proposal {p.id} ({p.provider}, {confidence}): {p.report.verdict}")
         if p.patch.changes():
             err(f"    changes: {', '.join(p.patch.changes())}")
-        for problem in p.report.problems[:5]:
-            err(f"    problem: {problem}")
-        for note in p.report.notes:
-            err(f"    note: {note}")
+        _print_checks(p.report, "    ")
 
 
-def _print_report(report: RunReport, fetcher: HttpFetcher, snapshots: Path) -> None:
+def _print_verified(report: VerificationReport) -> None:
+    typer.echo(f"promote: verified again: {report.verdict}", err=True)
+    _print_checks(report, "  ")
+
+
+def _print_checks(report: VerificationReport, indent: str) -> None:
+    """Every check (passed, failed or not run, and why), then what was compared, field
+    by field, and what the rules tolerated."""
+    for check in report.checks:
+        typer.echo(f"{indent}{check.status:<8} {check.name}: {check.reason}", err=True)
+        for problem in check.problems[:5]:
+            typer.echo(f"{indent}  problem: {problem}", err=True)
+    for line in report.evidence():
+        typer.echo(f"{indent}{line}", err=True)
+
+
+def _requests(sent: Requests) -> str:
+    return f"requests: {sent.sent} ({sent.retried} retried)"
+
+
+def _print_report(report: RunReport, snapshots: Path) -> None:
     def err(line: str) -> None:
         typer.echo(line, err=True)
 
@@ -597,7 +763,8 @@ def _print_report(report: RunReport, fetcher: HttpFetcher, snapshots: Path) -> N
         f"{summary.valid_records} records, {summary.invalid_records} invalid, "
         f"{len(summary.failures)} failed"
     )
-    err(f"  requests: {fetcher.requests} ({fetcher.retries} retried)")
+    if report.requests is not None:  # this run's own: not the heal's, nor another run's
+        err(f"  {_requests(report.requests)}")
     if summary.fallbacks:
         err(f"  fallback strategies used: {per_field(summary.fallbacks)}")
     if summary.empty:
@@ -609,10 +776,18 @@ def _print_report(report: RunReport, fetcher: HttpFetcher, snapshots: Path) -> N
     if len(summary.failures) > 5:
         err(f"  ... and {len(summary.failures) - 5} more failures")
     err(f"  snapshots: {snapshots / summary.source_id / summary.run_id}")
+    if report.pruned:
+        older = f"{len(report.pruned)} older run{'s' if len(report.pruned) > 1 else ''}"
+        err(f"  pruned: the snapshots of {older}")
     err(f"status: {report.status}")
     for f in report.failures:
         err(f"  {f.category}: {f.message}")
         if f.fields:
             err(f"    failing: {', '.join(f.fields)}")
+    if report.status == "drift":
+        err(
+            "  the last good run stays the baseline: runs keep drifting until you check this "
+            f"data and accept it with: scrapemend accept-drift {report.run_id}"
+        )
     for warning in report.warnings:
         err(f"  warning: {warning}")

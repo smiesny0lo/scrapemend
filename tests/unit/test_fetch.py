@@ -12,6 +12,7 @@ from scrapemend.fetch import (
     BlockedError,
     FetchError,
     HttpFetcher,
+    Requests,
     RobotsDisallowed,
     TransientError,
 )
@@ -98,6 +99,22 @@ def test_retries_5xx_with_backoff(clock: FakeClock) -> None:
     throttle, first, second = clock.sleeps
     assert throttle == 1.0  # rate limit after robots.txt
     assert 1 <= first < 2 and 2 <= second < 3  # backoff 1s, 2s, plus up to 1s jitter
+
+
+def test_requests_of_one_step(clock: FakeClock) -> None:
+    # What one step (a run, a heal) sent through a fetcher that others use too.
+    site = FakeSite({PAGE: [httpx.Response(503), ok()]})
+    f = fetcher(site, clock)
+    before = Requests.of(f)
+    assert before == Requests(sent=0, retried=0)
+    f.fetch(PAGE)
+    middle = Requests.of(f)
+    assert middle == Requests(sent=3, retried=1)  # robots.txt, the page twice
+    f.fetch(PAGE)
+    assert Requests.since(f, middle) == Requests(sent=1, retried=0)
+    # A fetcher that doesn't count them (a plugin's, a test's) has none to say.
+    assert Requests.of(object()) is None
+    assert Requests.since(object(), None) is None
 
 
 def test_gives_up_after_max_attempts(clock: FakeClock) -> None:

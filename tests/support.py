@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI
+from starlette.types import ASGIApp
 
 from scrapemend.heal.providers.anthropic import RepairOutput
 
@@ -69,7 +69,7 @@ class FakeClock:
 
 
 @contextmanager
-def serve(app: FastAPI) -> Iterator[str]:
+def serve(app: ASGIApp) -> Iterator[str]:
     """Run an app on a free local port in a background thread; yields its base URL."""
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)

@@ -1,0 +1,47 @@
+# Review attack A2 on layout v3: the correct repair, except that description reads
+# div.mt-6 p, the deadline box's paragraph, not the description.
+rationale: 'v3: description is the paragraph in the mt-6 block'
+confidence: 0.9
+container:
+  css: div.grid > div.rounded-lg
+follow:
+  css: h3 a::attr(href)
+next_page:
+  css: a[aria-label='Next page']::attr(href)
+fields:
+  reference:
+    strategies:
+    - regex: Ref\.\s*(TN-\d{4}-\d{4})
+  title:
+    strategies:
+    - css: div.max-w-3xl > h2
+  authority:
+    strategies:
+    - label: Contracting authority
+  category:
+    strategies:
+    - regex: '^(.+?) · '
+      within:
+        css: div.max-w-3xl > div:first-child
+  location:
+    strategies:
+    - regex: ' · (.+)$'
+      within:
+        css: div.max-w-3xl > div:first-child
+  published:
+    strategies:
+    - regex: Published (\d{1,2} \w{3} \d{4})
+  deadline:
+    strategies:
+    - label:
+        text: Deadline
+        relation: after
+  value:
+    strategies:
+    - regex: Estimated value:?\s*(€\s?[\d,.]+)
+  status:
+    strategies:
+    - regex: Status:\s*(\w+)
+  description:
+    strategies:
+    - css: div.mt-6 p

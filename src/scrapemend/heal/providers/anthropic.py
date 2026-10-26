@@ -13,6 +13,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from scrapemend import DISTRIBUTION
 from scrapemend.heal.context import RepairContext
 from scrapemend.heal.providers.base import ProviderError
 from scrapemend.spec.patch import SpecPatch
@@ -127,7 +128,8 @@ element, as in <dt>Deadline</dt><dd>VALUE</dd>.
 - {label: {text: "Deadline", relation: after}}: the rest of a single line of text that starts \
 with the label, as in <p>Deadline: VALUE</p> or <p>Deadline <b>VALUE</b></p>.
 - {regex: PATTERN, within: null}: searches the page's visible text; capture group 1 is the \
-value. With within: {css: ...} only that element's text is searched, which is much safer.
+value. With within: {css: ...} only that element's text is searched, which is much safer. \
+Regexes run on RE2: no lookarounds or backreferences, and \\w, \\d and \\s match ASCII only.
 - {custom: ...} strategies in the current spec come from plugins. You can't propose them; \
 they stay where they are, and the strategies you give for that field are added around them.
 container, follow and next_page take css or xpath only; follow and next_page must give URLs \
@@ -222,7 +224,7 @@ class AnthropicProvider:
         except ImportError:
             raise ProviderError(
                 "the anthropic provider needs the anthropic package: "
-                "pip install 'scrapemend[anthropic]'"
+                f'pip install "{DISTRIBUTION}[anthropic]"'
             ) from None
         # The SDK adapts the schema to what structured outputs support.
         schema = anthropic.transform_schema(RepairOutput)

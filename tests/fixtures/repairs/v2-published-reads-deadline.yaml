@@ -1,0 +1,48 @@
+# Review attack A1 on layout v2: the correct repair, except that published reads the
+# deadline's row (dd.tender__closing). Both are valid dates in the same format.
+rationale: v2 renamed classes; published is the closing date row
+confidence: 0.9
+container:
+  css: table.tender-table tr.tender-row
+follow:
+  css: a.tender-link::attr(href)
+next_page:
+  css: a[rel=next]::attr(href)
+fields:
+  reference:
+    strategies:
+    - css: dd.tender__ref
+    - label: Reference
+  title:
+    strategies:
+    - css: h1.tender__title
+  authority:
+    strategies:
+    - css: dd.tender__buyer
+    - label: Contracting authority
+  category:
+    strategies:
+    - css: dd.tender__category
+    - label: Category
+  location:
+    strategies:
+    - css: dd.tender__location
+    - label: Location
+  published:
+    strategies:
+    - css: dd.tender__closing
+  deadline:
+    strategies:
+    - css: dd.tender__closing
+    - label: Deadline
+  value:
+    strategies:
+    - css: dd.tender__amount
+    - regex: Estimated value:?\s*(€\s?[\d,.]+)
+  status:
+    strategies:
+    - css: dd.tender__status
+    - label: Status
+  description:
+    strategies:
+    - css: div.tender__description p

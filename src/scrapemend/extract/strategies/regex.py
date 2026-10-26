@@ -1,20 +1,28 @@
-import re
-
 from lxml import etree
 from lxml.cssselect import CSSSelector
 
+from scrapemend.extract import patterns
 from scrapemend.extract.document import Document, squash, text_of
+from scrapemend.extract.patterns import RegexTimeout, compile_pattern
+from scrapemend.extract.strategies.base import StrategyTimeout
 from scrapemend.spec import CssSpec, RegexSpec
+
+MAX_TIMEOUTS = 3  # searches that may time out before a strategy stops trying, for good
 
 
 class RegexStrategy:
     """First match of a regular expression in the visible text (not the markup).
     The value is the first capture group if the pattern has one, else the whole match.
-    With `within`, only the first element matching that selector is searched."""
+    With `within`, only the first element matching that selector is searched.
+
+    It runs on the spec's engine (see scrapemend.extract.patterns). A search with
+    Python's re that takes longer than its time limit raises StrategyTimeout; after
+    MAX_TIMEOUTS of them, the strategy raises it at once, without searching."""
 
     def __init__(self, spec: RegexSpec) -> None:
         self.spec = spec
-        self._pattern = re.compile(spec.regex)
+        self._pattern = compile_pattern(spec.regex, spec.engine)
+        self.timeouts = 0
         within = spec.within
         self._within: etree.XPath | None  # CSSSelector is an XPath subclass
         if within is None:
@@ -44,8 +52,15 @@ class RegexStrategy:
                 return None
             element = elements[0]
             text = text_of(element)
-        match = self._pattern.search(text)
-        if match is None:
-            return None
-        value = squash(match.group(1) if self._pattern.groups else match.group(0))
+        if self.timeouts >= MAX_TIMEOUTS:
+            raise StrategyTimeout(
+                f"regex {self.spec.regex!r} timed out {self.timeouts} times; not tried again"
+            )
+        try:
+            matched = self._pattern.first(text)
+        except RegexTimeout:
+            self.timeouts += 1
+            limit = f"{patterns.TIME_LIMIT:g}s"
+            raise StrategyTimeout(f"regex {self.spec.regex!r} took longer than {limit}") from None
+        value = squash(matched)
         return (element, value) if value else None

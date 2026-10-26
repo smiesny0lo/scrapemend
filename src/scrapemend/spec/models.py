@@ -76,19 +76,26 @@ class XPathSpec(_Model):
 class RegexSpec(_Model):
     """A regular expression over the text. The first capture group is the value if
     the pattern has one, otherwise the whole match. With `within`, only the text of
-    the first element that selector matches is searched (`Construction · Dunmere`)."""
+    the first element that selector matches is searched (`Construction · Dunmere`).
+
+    `engine` is re (Python's, the default) or re2, which runs in linear time and is
+    what a repair proposed by a provider gets (see scrapemend.extract.patterns)."""
 
     regex: str = Field(min_length=1)
     within: CssSpec | XPathSpec | None = None
+    engine: Literal["re", "re2"] = "re"
 
-    @field_validator("regex")
-    @classmethod
-    def _compiles(cls, value: str) -> str:
-        try:
-            re.compile(value)
-        except re.error as e:
-            raise ValueError(f"invalid regex {value!r}: {e}") from None
-        return value
+    @model_validator(mode="after")
+    def _compiles(self) -> Self:
+        # Imported here: the extract package imports this module.
+        from scrapemend.extract.patterns import problem
+
+        reason = problem(self.regex, self.engine)
+        if reason is not None:
+            if self.engine == "re2":
+                raise ValueError(f"RE2 can't compile {self.regex!r}: {reason}")
+            raise ValueError(f"invalid regex {self.regex!r}: {reason}")
+        return self
 
 
 class LabelOptions(_Model):
@@ -252,11 +259,36 @@ class HealSpec(_Model):
     mode: Literal["off", "propose", "auto"] = "propose"
     anchors: int = Field(default=10, ge=0)  # known-good records kept for verification
     # Share of anchor values every stable field must reproduce for a repair to be
-    # accepted. Anchor pages that fail to load don't count, but at least three must
-    # load (or all, if there are fewer).
+    # accepted, and of the shadow run's records known from the last good run. Anchor
+    # pages that fail to load don't count, but at least three must load (or all, if
+    # there are fewer).
     threshold: float = Field(default=1.0, gt=0, le=1)
     # The same for volatile fields, whose values may have changed since: most must not.
     volatile_match: float = Field(default=0.6, ge=0, le=1)
+    # The shadow run: the share of records a volatile field's value may have changed
+    # on since the last good run. A value that became empty never counts as a change.
+    volatile_change: float = Field(default=0.1, ge=0, le=1)
+    # The share of the last good run's records the shadow run must find again (of the
+    # records a sample draws, the share it must know; of the items on the listing pages
+    # it draws, the share it must find). A source that loses records naturally between
+    # runs (notices that close and come down) may need less.
+    shadow_min_found: float = Field(default=0.9, gt=0, le=1)
+    # The records the shadow run reads at most: drawn at random (with a fixed seed)
+    # from listing pages across the whole source, when it has more. `all` reads the
+    # whole source.
+    shadow_max_items: Annotated[int, Field(ge=20)] | Literal["all"] = 500
+
+    @field_validator("shadow_max_items", mode="before")
+    @classmethod
+    def _null_is_all(cls, value: Any) -> Any:
+        # Before `all`, null meant the whole source: a spec stored then keeps its meaning.
+        return "all" if value is None else value
+
+
+class SnapshotsSpec(_Model):
+    # Runs whose snapshots are kept, newest first. Older runs' are deleted after every
+    # run, except those still needed (see scrapemend.retention).
+    keep_runs: int = Field(default=10, ge=1)
 
 
 # --- source ---------------------------------------------------------------------------
@@ -272,6 +304,7 @@ class SourceSpec(_Model):
     item: ItemSpec
     expect: ExpectSpec = Field(default_factory=ExpectSpec)
     heal: HealSpec = Field(default_factory=HealSpec)
+    snapshots: SnapshotsSpec = Field(default_factory=SnapshotsSpec)
 
     @field_validator("id")
     @classmethod

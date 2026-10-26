@@ -4,6 +4,9 @@ Specs are never edited in place. A spec file's version is registered the first
 time it is run; a repair becomes a new version; rollback makes an older version
 active again. A spec file whose content changed without a new version number is
 refused, so a version number always means one exact spec.
+
+A repair promoted automatically is provisional until a human confirms it: its runs
+don't become the last good run (see scrapemend.runner.confirm).
 """
 
 import sqlite3
@@ -28,6 +31,7 @@ class SpecVersion(BaseModel):
     origin: Origin
     note: str
     created_at: AwareDatetime
+    provisional: bool = False  # promoted automatically, and not confirmed by a human yet
 
 
 class SourceState(BaseModel):
@@ -62,7 +66,11 @@ class SpecStore:
         assert active is not None
         return active
 
-    def add(self, spec: SourceSpec, origin: Origin, note: str) -> SpecVersion:
+    def add(
+        self, spec: SourceSpec, origin: Origin, note: str, *, provisional: bool = False
+    ) -> SpecVersion:
+        """Store a version. `provisional`: heal promoted it automatically, so no human
+        has looked at it yet."""
         version = SpecVersion(
             source_id=spec.id,
             version=spec.version,
@@ -70,6 +78,7 @@ class SpecStore:
             origin=origin,
             note=note,
             created_at=datetime.now(UTC),
+            provisional=provisional,
         )
         with self.db:
             self.db.execute(
@@ -83,20 +92,42 @@ class SpecStore:
                     version.created_at.isoformat(),
                 ),
             )
+            if provisional:
+                self.db.execute(
+                    "INSERT INTO automatic_promotions VALUES (?, ?, NULL)", (spec.id, spec.version)
+                )
         return version
 
     def get(self, source_id: str, version: int) -> SpecVersion | None:
         row = self.db.execute(
-            "SELECT * FROM spec_versions WHERE source_id = ? AND version = ?",
-            (source_id, version),
+            f"{_SELECT} WHERE v.source_id = ? AND v.version = ?", (source_id, version)
         ).fetchone()
         return _version(row) if row else None
 
     def history(self, source_id: str) -> list[SpecVersion]:
-        rows = self.db.execute(
-            "SELECT * FROM spec_versions WHERE source_id = ? ORDER BY version", (source_id,)
-        )
+        rows = self.db.execute(f"{_SELECT} WHERE v.source_id = ? ORDER BY v.version", (source_id,))
         return [_version(row) for row in rows]
+
+    def is_provisional(self, source_id: str, version: int) -> bool:
+        """Promoted automatically, and not confirmed yet."""
+        stored = self.get(source_id, version)
+        return stored is not None and stored.provisional
+
+    def promoted_automatically(self, source_id: str, version: int) -> bool:
+        row = self.db.execute(
+            "SELECT 1 FROM automatic_promotions WHERE source_id = ? AND version = ?",
+            (source_id, version),
+        ).fetchone()
+        return row is not None
+
+    def confirm(self, source_id: str, version: int) -> None:
+        """A human checked a version promoted automatically: it is no longer provisional."""
+        with self.db:
+            self.db.execute(
+                "UPDATE automatic_promotions SET confirmed_at = ?"
+                " WHERE source_id = ? AND version = ?",
+                (datetime.now(UTC).isoformat(), source_id, version),
+            )
 
     def next_version(self, source_id: str) -> int:
         row = self.db.execute(
@@ -125,19 +156,20 @@ class SpecStore:
             )
 
     def quarantine(self, source_id: str, reason: str) -> None:
-        """Mark a source as needing a human: its spec is broken and no repair passed."""
+        """Mark a source as needing a human: its spec is broken and no repair passed.
+        Activating a version (a promotion, a rollback, a new spec file) ends it."""
         with self.db:
             self.db.execute(
                 "UPDATE sources SET quarantine_reason = ?, changed_at = ? WHERE source_id = ?",
                 (reason, datetime.now(UTC).isoformat(), source_id),
             )
 
-    def release(self, source_id: str) -> None:
-        with self.db:
-            self.db.execute(
-                "UPDATE sources SET quarantine_reason = NULL, changed_at = ? WHERE source_id = ?",
-                (datetime.now(UTC).isoformat(), source_id),
-            )
+
+_SELECT = (
+    "SELECT v.*, a.version IS NOT NULL AND a.confirmed_at IS NULL AS provisional"
+    " FROM spec_versions v LEFT JOIN automatic_promotions a"
+    " ON a.source_id = v.source_id AND a.version = v.version"
+)
 
 
 def _version(row: sqlite3.Row) -> SpecVersion:
@@ -148,4 +180,5 @@ def _version(row: sqlite3.Row) -> SpecVersion:
         origin=row["origin"],
         note=row["note"],
         created_at=datetime.fromisoformat(row["created_at"]),
+        provisional=bool(row["provisional"]),
     )

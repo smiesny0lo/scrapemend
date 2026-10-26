@@ -45,6 +45,12 @@ heal:
   anchors: 10
   threshold: 1.0
   volatile_match: 0.6
+  volatile_change: 0.1
+  shadow_min_found: 0.9
+  shadow_max_items: 500   # all: the shadow run reads the whole source
+
+snapshots:
+  keep_runs: 10           # runs whose pages are kept, besides the ones still needed
 ```
 
 How a run works:
@@ -75,7 +81,7 @@ Without `item.follow`, every field is read from the item on the listing page, an
 deadline:
   type: date               # str (default), int, decimal, date, url
   required: true           # a record without it is invalid
-  volatile: false          # true: the value may legitimately change (prices, statuses); see heal.volatile_match
+  volatile: false          # true: the value may legitimately change (prices, statuses); see heal.volatile_change
   date_format: "%d %b %Y"  # strptime format; type: date only
   normalize: [strip]       # strip, collapse_whitespace, lower, strip_currency
   null_values: ["N/A"]     # texts that mean "no value" (any case)
@@ -117,6 +123,7 @@ Details:
   - `{text: Deadline, relation: after}`: the rest of a *single line of text* that starts with the label, as in `<p>Deadline: 3 Nov</p>` or `<p><b>Deadline</b> 3 Nov</p>`.
 
   Labels match case-insensitively, ignoring extra spaces and a trailing colon.
+- **`regex`** runs on Python's `re` by default, with each search stopped after a second. With `engine: re2` it runs on RE2, which is linear in the text but has no backreferences or lookarounds, and whose `\w`, `\d` and `\s` match ASCII only. A repair proposed by a provider always gets `engine: re2` (see [verification](verification.md#regexes)).
 - **`regex`** can search one element instead of the whole page. That's much safer when a line holds several values:
 
   ```yaml
@@ -140,17 +147,37 @@ Details:
 - **`off`:** report only.
 - **`propose`** (the default): a repair that passes verification waits for `scrapemend promote`.
 - **`auto`:** a repair is promoted at once, provided three things hold:
-  - it passed verification;
+  - it passed every check of the verification (one that couldn't run is never promoted automatically);
   - the failure carries structural evidence (the page fingerprint changed);
   - the repair's confidence is at least 0.5.
+
+  The version it becomes is provisional until you confirm it (`scrapemend confirm`): its runs don't become the last good run before that. See [provisional versions](running.md#provisional-versions).
+
+**Choosing `auto`.** Auto mode trades a human's look for time. A site that changes its layout at night is scraped with a repaired spec before anyone is awake, and the run after the promotion says `ok`. The price is that whatever the gate can't catch reaches your output with no one looking: a field wrong only on records the last good run didn't have, a volatile value wrong on a few records within its allowance, a field wrong on a few records a sample didn't read (see [what it can't catch](verification.md#what-it-cant-catch)). Each of those passed the gate in a review, and the run after it said `ok`. The report that says what the gate let through goes with the `repair_promoted` alert and stays in `scrapemend proposals`, but nobody reads it before the data flows. The provisional version keeps such an error from becoming what the next repair is compared with, not out of the records you already wrote. The confidence of at least 0.5 is the provider's own claim, so it filters nothing a wrong provider is sure of.
+
+Use `auto` where stale data costs more than a few wrong records, and read its alerts. Keep `propose`, the default, where a wrong record costs more than a late one. A spec that doesn't set `heal.mode` never promotes a repair by itself.
 
 The other settings:
 
 - **`heal.anchors`** is the number of known-good records kept for verifying repairs. More anchors catch errors that affect fewer records.
-- **`heal.threshold`** is the share of anchor values *every* stable field must reproduce for a repair to pass (default 1.0: all of them). Anchor pages that fail to load don't count against it.
-- **`heal.volatile_match`** is the same for volatile fields (default 0.6): their values may have changed since the last good run, but most must still match.
+- **`heal.threshold`** is the share of anchor values *every* stable field must reproduce for a repair to pass (default 1.0: all of them), and the share of the shadow run's records it must read exactly as the last good run did. Anchor pages that fail to load don't count against it.
+- **`heal.volatile_match`** is the same for volatile fields on the anchors (default 0.6): their values may have changed since the last good run, but most must still match.
+- **`heal.volatile_change`** is the share of the shadow run's records on which a volatile field's value may have changed (default 0.1). A value that became empty never counts as a change.
+- **`heal.shadow_min_found`** is the share of the last good run's records the shadow run must find again (default 0.9). A source that loses records by itself between runs (notices that close and come down) may need a lower one, because the last good run can be days old when a repair is verified. A lower share also lets through a repair that misses that many records; see [sources that churn](verification.md#sources-that-churn).
+- **`heal.shadow_max_items`** caps the detail pages the shadow run reads (default 500; at least 20). A source whose last good run had more is sampled: the shadow run still reads every listing page, and draws the records whose detail pages it reads at random, with a fixed seed, from all their items. A sample catches a field wrong on a few records only with some probability (see [what the gate can't catch](verification.md#what-it-cant-catch)). `all` reads the whole source, however large, at the cost of about one request per page; the demo specs use it. Before the shadow run starts, `heal` says how many records it will compare and about how many requests that takes.
 
 A repair can't change any of these settings. [Verification](verification.md) explains each check, and what it can't catch.
+
+## Snapshots
+
+Every page a run downloads is stored as a snapshot, under `--snapshots`. **`snapshots.keep_runs`** (default 10, at least 1) is how many runs' snapshots a source keeps, newest first. After every run, the snapshots of older runs are deleted, except those still needed:
+
+- the last good run's, which runs and repairs are compared with;
+- a drift run's that `scrapemend accept-drift` could still make the last good run;
+- the failed run's of a proposal that can still be promoted (accepted or unverified): `promote` verifies it again on those pages;
+- the last failed run's, which `heal` repairs by default.
+
+`scrapemend prune SPEC` does the same at any time, and `--dry-run` only lists what would go. See [running](running.md#snapshots).
 
 ## Versions
 

@@ -4,6 +4,8 @@ A repair provider looks at a broken spec and proposes a fix. Its answer is **dat
 
 ## Built-in providers
 
+<!-- The install hint below uses scrapemend.DISTRIBUTION; tests/unit/test_package.py checks it. -->
+
 | Provider | Use |
 |---|---|
 | `none` (default) | proposes nothing. Failures are detected and reported, and a human repairs the spec. scrapemend works fully offline. |
@@ -30,6 +32,8 @@ scrapemend heal my-source.yaml --patch my-fix.yaml
 ## What a patch can change
 
 A `SpecPatch` can set new selectors for the item container, the follow link and the next-page link. It can also give existing fields new strategies, along with their `normalize`, `date_format` and `null_values`. A field's [custom strategies](custom-strategies.md) are kept: the patch's strategies are added around them.
+
+Every regex in a patch from a provider runs on RE2, and is stored that way: it can't be made slow by any page, and one RE2 can't compile is rejected. A hand-written patch (`--patch`) keeps Python's `re`, with a time limit. See [regexes](verification.md#regexes).
 
 It **cannot** touch:
 
@@ -58,9 +62,9 @@ Settings:
 - **Effort** is `high`.
 - **Refusal fallbacks** are enabled through the server-side fallback beta, so a safety decline is retried on a fallback model inside the same call.
 
-In testing, Claude repaired both demo redesigns on the first attempt, with every field reproducing 10/10 anchor values. Those answers are recorded in `tests/fixtures/recorded/` and replayed in CI. scrapemend doesn't report token usage or cost per repair; your Anthropic Console shows both.
+In testing, Claude repaired both demo redesigns on the first attempt, with every field reproducing 10/10 anchor values. Those answers are recorded in `tests/fixtures/recorded/` and replayed in CI, where they pass today's gate, shadow run included; the live test (`SCRAPEMEND_LIVE_ANTHROPIC=1`) asks Claude again. scrapemend doesn't report token usage or cost per repair; your Anthropic Console shows both.
 
-**Untrusted input.** Page HTML comes from the scraped website. The prompt marks it as data and tells the model to ignore instructions inside it. The patch schema and the gate are the real defence: even a manipulated answer can only propose selectors and strategies, and those must reproduce the known values on the pages the gate checks (see [what the gate can and can't catch](verification.md#what-the-gate-can-and-cant-catch)).
+**Untrusted input.** Page HTML comes from the scraped website. The prompt marks it as data and tells the model to ignore instructions inside it. The patch schema and the gate are the real defence: even a manipulated answer can only propose selectors and strategies, its regexes run on RE2, and the result must reproduce the last good run's records in a shadow run over the source (see [what the gate guarantees](verification.md#what-the-gate-guarantees), and [what it can't catch](verification.md#what-it-cant-catch)).
 
 ## Writing your own provider
 
@@ -86,6 +90,7 @@ class MyProvider:
 - Return `None` when you have nothing (more) to suggest.
 - Raise `scrapemend.heal.providers.ProviderError` when you can't produce a repair, for example when an API fails.
 - `rationale` and `confidence` (0–1) on the patch are shown to whoever reviews it. Confidence below 0.5 also blocks automatic promotion.
+- The regexes of your provider's patches run on RE2, like Claude's.
 
 Register the provider in your plugin package's `pyproject.toml`, then use `--provider my-provider`:
 

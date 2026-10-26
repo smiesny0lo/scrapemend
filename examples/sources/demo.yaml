@@ -76,3 +76,4 @@ expect:
 heal:
   mode: propose
   anchors: 10
+  shadow_max_items: all  # verify repairs on every record; the default reads a sample of 500

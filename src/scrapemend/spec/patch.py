@@ -10,11 +10,18 @@ strategies are added around them. Applying a patch yields a new spec version,
 validated like any spec file.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from scrapemend.spec.models import CustomSpec, Normalizer, SelectorSpec, SourceSpec, StrategySpec
+from scrapemend.spec.models import (
+    CustomSpec,
+    Normalizer,
+    RegexSpec,
+    SelectorSpec,
+    SourceSpec,
+    StrategySpec,
+)
 
 
 class _Model(BaseModel):
@@ -51,6 +58,24 @@ class SpecPatch(_Model):
         if self.next_page:
             parts.append("fetch.paginate.next")
         return parts + [f"fields.{name}" for name in self.fields]
+
+    def with_regex_engine(self, engine: Literal["re", "re2"]) -> "SpecPatch":
+        """This patch with every regex set to run on `engine`. Raises ValueError,
+        naming the strategy, for a regex that engine can't compile."""
+        from scrapemend.extract.patterns import problem  # the extract package imports this one
+
+        fields = {}
+        for name, field in self.fields.items():
+            strategies: list[StrategySpec] = []
+            for index, strategy in enumerate(field.strategies):
+                if isinstance(strategy, RegexSpec):
+                    if (reason := problem(strategy.regex, engine)) is not None:
+                        where = f"fields.{name}.strategies[{index}]"
+                        raise ValueError(f"{where}: RE2 can't compile {strategy.regex!r}: {reason}")
+                    strategy = strategy.model_copy(update={"engine": engine})
+                strategies.append(strategy)
+            fields[name] = field.model_copy(update={"strategies": tuple(strategies)})
+        return self.model_copy(update={"fields": fields})
 
     def apply(self, spec: SourceSpec, version: int) -> SourceSpec:
         """A new spec version with this patch applied. Raises ValueError (pydantic's

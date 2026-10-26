@@ -76,6 +76,30 @@ def test_runs_oldest_first(store: FilesystemSnapshotStore) -> None:
     assert store.runs("unknown-source") == []
 
 
+def test_runs_in_the_same_second_by_their_first_page(store: FilesystemSnapshotStore) -> None:
+    # A run id is the second the run started and a random suffix: the suffix can't
+    # tell which of two runs in one second came first, their first page can.
+    first, second = "20261013T080000Z-ffff", "20261013T080000Z-0000"
+    at = datetime(2026, 10, 13, 8, 0, 0, tzinfo=UTC)
+    store.put(snap(run_id=first, fetched_at=at))
+    store.put(snap(run_id=second, fetched_at=at.replace(microsecond=500_000)))
+    store.put(snap(run_id=first, fetched_at=at.replace(microsecond=900_000)))
+    assert store.runs("tenders-demo") == [first, second]
+
+
+def test_delete_run(store: FilesystemSnapshotStore, tmp_path: Path) -> None:
+    gone, kept = "20261013T080000Z-aaaa", "20261014T080000Z-bbbb"
+    for run_id in (gone, gone, kept):
+        store.put(snap(run_id=run_id))
+    store.delete_run("tenders-demo", gone)
+    assert store.runs("tenders-demo") == [kept]
+    assert store.snapshots("tenders-demo", gone) == []
+    assert not (tmp_path / "tenders-demo" / gone).exists()
+    store.delete_run("tenders-demo", gone)  # nothing left to delete is fine
+    with pytest.raises(KeyError):
+        store.delete_run("tenders-demo", "../escape")
+
+
 @pytest.mark.parametrize(
     ("content_type", "extension"),
     [

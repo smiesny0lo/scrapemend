@@ -108,6 +108,25 @@ def test_key_can_be_a_required_field() -> None:
     assert SourceSpec.model_validate(data).item.key == "title"
 
 
+def test_the_shadow_run_reads_a_sample_of_500_records_unless_told_all() -> None:
+    assert SourceSpec.model_validate(spec_data()).heal.shadow_max_items == 500
+    data = spec_data()
+    data["heal"] = {"shadow_max_items": "all"}
+    assert SourceSpec.model_validate(data).heal.shadow_max_items == "all"
+    data["heal"] = {"shadow_max_items": 2000}
+    assert SourceSpec.model_validate(data).heal.shadow_max_items == 2000
+    # Before `all`, null meant the whole source: a spec stored then keeps its meaning.
+    data["heal"] = {"shadow_max_items": None}
+    assert SourceSpec.model_validate(data).heal.shadow_max_items == "all"
+
+
+def test_the_shadow_run_must_find_90_percent_of_the_old_records_unless_told_less() -> None:
+    assert SourceSpec.model_validate(spec_data()).heal.shadow_min_found == 0.9
+    data = spec_data()
+    data["heal"] = {"shadow_min_found": 0.7}
+    assert SourceSpec.model_validate(data).heal.shadow_min_found == 0.7
+
+
 def test_round_trips_through_dump() -> None:
     spec = SourceSpec.model_validate(spec_data())
     assert SourceSpec.model_validate(spec.model_dump(mode="json")) == spec
@@ -220,6 +239,10 @@ def test_date_format_only_for_dates() -> None:
         (("fetch", "start"), "not a url"),
         (("expect", "max_null_rate", "value"), 1.5),
         (("heal", "mode"), "yolo"),
+        (("heal", "shadow_max_items"), 19),
+        (("heal", "shadow_max_items"), "every"),
+        (("heal", "shadow_min_found"), 0),
+        (("heal", "shadow_min_found"), 1.5),
         (("id",), "Tenders Demo"),
         (("fields", "title", "type"), "float"),
         (("fields", "title", "normalize"), ["titlecase"]),

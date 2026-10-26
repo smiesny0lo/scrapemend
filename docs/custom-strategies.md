@@ -75,5 +75,6 @@ It picks a value by its path (`offers.price`), optionally only from objects of o
 ## Keep in mind
 
 - Repair providers can't propose custom strategies: the anthropic provider's answer schema only includes the built-in ones. A repair keeps yours in place and adds its strategies around them: a custom strategy listed before every built-in one stays first, any other comes after the repair's strategies. The verification gate runs custom strategies like any other.
+- A strategy that gives up on a page because it takes too long may raise `scrapemend.extract.strategies.StrategyTimeout`: the field's next strategy gets its turn, and a repair whose strategy times out during verification is rejected.
 - The gate checks that no two fields read the same element where their values differ. It can only do that for a custom strategy that also has a `locate(doc)` method, returning the element it read the value from (or `None`).
 - Strategies must not fetch anything themselves. All requests go through the fetcher, which applies robots.txt and rate limits. If you need another document (a linked PDF, an API response), that's a fetcher or pipeline extension, not a strategy.

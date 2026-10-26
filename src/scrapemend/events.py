@@ -15,6 +15,7 @@ EventKind = Literal[
     "repair_proposed",  # a repair passed verification and waits for `scrapemend promote`
     "repair_rejected",  # a repair failed verification; the source is quarantined
     "repair_promoted",  # a repaired spec version is now active
+    "heal_blocked",  # the site refused us while healing: it stopped, and nothing was promoted
     "quarantined",  # the source needs a human: no acceptable repair
 ]
 
@@ -26,6 +27,7 @@ _LEVELS: dict[EventKind, int] = {
     "repair_proposed": logging.WARNING,
     "repair_rejected": logging.ERROR,
     "repair_promoted": logging.WARNING,
+    "heal_blocked": logging.ERROR,
     "quarantined": logging.ERROR,
 }
 

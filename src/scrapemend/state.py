@@ -1,5 +1,6 @@
 """Local state in one SQLite file: runs, baselines, anchors and the last good run's
-records, spec versions, proposals.
+records (and a drift run's, or a provisional version's run's, until a human accepts
+it), spec versions and which were promoted automatically, proposals.
 
 Every table is created on first use, so an older database simply gains the tables
 a newer version needs. Stores share one connection; each write commits at once.
@@ -45,6 +46,13 @@ CREATE TABLE IF NOT EXISTS good_records (
     PRIMARY KEY (source_id, key)
 );
 
+CREATE TABLE IF NOT EXISTS held_baselines (
+    source_id TEXT PRIMARY KEY,
+    run_id    TEXT NOT NULL,         -- the latest drift run, until accepted or an ok run
+    anchors   TEXT NOT NULL,         -- its anchors, as a JSON list
+    records   TEXT NOT NULL          -- its valid records, key -> field -> value, as JSON
+);
+
 CREATE TABLE IF NOT EXISTS spec_versions (
     source_id  TEXT NOT NULL,
     version    INTEGER NOT NULL,
@@ -52,6 +60,13 @@ CREATE TABLE IF NOT EXISTS spec_versions (
     origin     TEXT NOT NULL,        -- file | repair
     note       TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    PRIMARY KEY (source_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS automatic_promotions (
+    source_id    TEXT NOT NULL,
+    version      INTEGER NOT NULL,   -- a spec version heal promoted in auto mode
+    confirmed_at TEXT,               -- until a human confirms it, it is provisional
     PRIMARY KEY (source_id, version)
 );
 
@@ -70,7 +85,7 @@ CREATE TABLE IF NOT EXISTS proposals (
     provider         TEXT NOT NULL,
     patch            TEXT NOT NULL,  -- the SpecPatch as JSON
     report           TEXT NOT NULL,  -- the VerificationReport as JSON
-    status           TEXT NOT NULL,  -- accepted | rejected | promoted
+    status           TEXT NOT NULL,  -- accepted | unverified | rejected | promoted
     promoted_version INTEGER,
     created_at       TEXT NOT NULL
 );
