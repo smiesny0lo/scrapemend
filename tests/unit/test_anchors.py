@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from scrapemend.extract import FieldResult, RecordResult
-from scrapemend.heal.anchors import (
+from specmend.extract import FieldResult, RecordResult
+from specmend.heal.anchors import (
     Anchor,
     AnchorPicker,
     AnchorStore,
@@ -15,9 +15,9 @@ from scrapemend.heal.anchors import (
     key_of,
     split,
 )
-from scrapemend.pipeline import ValidatedRecord
-from scrapemend.state import connect
-from scrapemend.validate import Violation
+from specmend.pipeline import ValidatedRecord
+from specmend.state import connect
+from specmend.validate import Violation
 
 
 def record(n: int, valid: bool = True, **values: Any) -> ValidatedRecord:

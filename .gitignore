@@ -20,7 +20,7 @@ htmlcov/
 !.env.example
 
 # Runtime data: never commit scraped content or run metadata.
-# Anchored to the repo root: src/scrapemend/snapshots/ is code and must be tracked.
+# Anchored to the repo root: src/specmend/snapshots/ is code and must be tracked.
 /snapshots/
 *.db
 *.sqlite

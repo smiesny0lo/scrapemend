@@ -16,11 +16,11 @@ from typer.testing import CliRunner
 
 from examples.mutating_site.app import create_app
 from examples.mutating_site.records import Notice, generate_notices
-from scrapemend.cli import app as cli
-from scrapemend.fetch import BlockedError, HttpFetcher, RobotsDisallowed, TransientError
-from scrapemend.pipeline import SourceRun
-from scrapemend.snapshots import FilesystemSnapshotStore
-from scrapemend.spec import SourceSpec, load_spec
+from specmend.cli import app as cli
+from specmend.fetch import BlockedError, HttpFetcher, RobotsDisallowed, TransientError
+from specmend.pipeline import SourceRun
+from specmend.snapshots import FilesystemSnapshotStore
+from specmend.spec import SourceSpec, load_spec
 from tests.support import FakeClock, serve
 
 pytestmark = pytest.mark.integration

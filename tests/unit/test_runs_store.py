@@ -1,10 +1,10 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from scrapemend.detect.classify import Failure, Status
-from scrapemend.pipeline import RunSummary
-from scrapemend.runs import RunMode, RunReport, RunStore
-from scrapemend.state import connect
+from specmend.detect.classify import Failure, Status
+from specmend.pipeline import RunSummary
+from specmend.runs import RunMode, RunReport, RunStore
+from specmend.state import connect
 
 T0 = datetime(2026, 10, 25, 9, 0, tzinfo=UTC)
 

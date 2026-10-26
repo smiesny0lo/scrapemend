@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from scrapemend.heal.proposals import ProposalStore
-from scrapemend.heal.verify import Check, CheckStatus, FieldCheck, VerificationReport
-from scrapemend.spec.patch import SpecPatch
-from scrapemend.state import connect
+from specmend.heal.proposals import ProposalStore
+from specmend.heal.verify import Check, CheckStatus, FieldCheck, VerificationReport
+from specmend.spec.patch import SpecPatch
+from specmend.state import connect
 
 PATCH = SpecPatch.model_validate(
     {"container": {"css": "tr.row"}, "rationale": "new rows", "confidence": 0.7}

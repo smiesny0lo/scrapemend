@@ -4,19 +4,19 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from scrapemend.detect.classify import Failure
-from scrapemend.heal.context import Example, RepairContext, prune_html
-from scrapemend.heal.providers import NoneProvider, PatchProvider, ProviderError, make_provider
-from scrapemend.heal.providers import anthropic as provider_module
-from scrapemend.heal.providers.anthropic import (
+from specmend.detect.classify import Failure
+from specmend.heal.context import Example, RepairContext, prune_html
+from specmend.heal.providers import NoneProvider, PatchProvider, ProviderError, make_provider
+from specmend.heal.providers import anthropic as provider_module
+from specmend.heal.providers.anthropic import (
     DEFAULT_MODEL,
     FALLBACK_BETA,
     SYSTEM,
     AnthropicProvider,
     RepairOutput,
 )
-from scrapemend.spec import CssSpec, LabelSpec, RegexSpec
-from scrapemend.spec.patch import SpecPatch
+from specmend.spec import CssSpec, LabelSpec, RegexSpec
+from specmend.spec.patch import SpecPatch
 from tests.support import RecordedClaude, recorded
 
 CONTEXT = RepairContext(
@@ -82,7 +82,7 @@ def test_rejected_attempts_are_sent_after_the_cached_context() -> None:
 
 
 def test_model_and_fallbacks_are_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SCRAPEMEND_ANTHROPIC_MODEL", "claude-sonnet-5-5")
+    monkeypatch.setenv("SPECMEND_ANTHROPIC_MODEL", "claude-sonnet-5-5")
     client = RecordedClaude("anthropic-demo-v2")
     AnthropicProvider(client=client, fallbacks=False).propose(CONTEXT)
     assert client.requests[0]["model"] == "claude-sonnet-5-5"
@@ -273,12 +273,12 @@ def test_plugin_providers_come_from_entry_points(monkeypatch: pytest.MonkeyPatch
         def load(self) -> Any:
             return NoneProvider
 
-    import scrapemend.heal.providers as providers
+    import specmend.heal.providers as providers
 
     monkeypatch.setattr(
         providers,
         "entry_points",
-        lambda group: [EntryPoint()] if group == "scrapemend.providers" else [],
+        lambda group: [EntryPoint()] if group == "specmend.providers" else [],
     )
     assert isinstance(make_provider("mine"), NoneProvider)
 

@@ -2,7 +2,7 @@
 
 The other plugin tests fake `importlib.metadata.entry_points`. This one builds a
 tiny wheel declaring a strategy, a repair provider and a notifier, installs it
-with pip (offline, into a temporary directory) and runs the real `scrapemend`
+with pip (offline, into a temporary directory) and runs the real `specmend`
 executable with that directory on its path, the way a user's plugin is found.
 """
 
@@ -19,16 +19,16 @@ from pathlib import Path
 
 import pytest
 
-import scrapemend.extract.strategies as strategies
-from scrapemend.events import Event, make_notifier
-from scrapemend.extract import Document
-from scrapemend.extract.strategies import build
-from scrapemend.spec import CustomSpec
+import specmend.extract.strategies as strategies
+from specmend.events import Event, make_notifier
+from specmend.extract import Document
+from specmend.extract.strategies import build
+from specmend.spec import CustomSpec
 
 pytestmark = pytest.mark.integration
 
 MODULE = '''\
-from scrapemend.extract import Document
+from specmend.extract import Document
 
 
 class Shout:
@@ -57,13 +57,13 @@ class TinyNotifier:
 '''
 
 ENTRY_POINTS = """\
-[scrapemend.strategies]
+[specmend.strategies]
 shout = tiny_plugin:Shout
 
-[scrapemend.providers]
+[specmend.providers]
 tiny = tiny_plugin:TinyProvider
 
-[scrapemend.notifiers]
+[specmend.notifiers]
 tiny = tiny_plugin:TinyNotifier
 """
 
@@ -85,7 +85,7 @@ def build_wheel(directory: Path) -> Path:
         "tiny_plugin/__init__.py": MODULE,
         f"{info}/METADATA": "Metadata-Version: 2.1\nName: tiny-plugin\nVersion: 0.1\n",
         f"{info}/WHEEL": (
-            "Wheel-Version: 1.0\nGenerator: scrapemend-tests\n"
+            "Wheel-Version: 1.0\nGenerator: specmend-tests\n"
             "Root-Is-Purelib: true\nTag: py3-none-any\n"
         ),
         f"{info}/entry_points.txt": ENTRY_POINTS,
@@ -117,9 +117,9 @@ def site_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return target
 
 
-def scrapemend(*args: str, plugin_path: Path | None) -> subprocess.CompletedProcess[str]:
-    executable = shutil.which("scrapemend", path=sysconfig.get_path("scripts"))
-    assert executable, "the scrapemend script is not installed: pip install -e ."
+def specmend(*args: str, plugin_path: Path | None) -> subprocess.CompletedProcess[str]:
+    executable = shutil.which("specmend", path=sysconfig.get_path("scripts"))
+    assert executable, "the specmend script is not installed: pip install -e ."
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)
     if plugin_path is not None:
@@ -137,14 +137,14 @@ def test_the_cli_finds_an_installed_plugin(site_dir: Path, tmp_path: Path) -> No
     db = str(tmp_path / "state.db")
     heal = ("heal", str(plain), "--provider", "tiny", "--db", db)
 
-    without = scrapemend("validate", str(spec), plugin_path=None)
+    without = specmend("validate", str(spec), plugin_path=None)
     assert without.returncode == 1
     assert "no installed plugin provides the custom strategy 'shout'" in without.stderr
-    assert "unknown repair provider 'tiny'" in scrapemend(*heal, plugin_path=None).stderr
+    assert "unknown repair provider 'tiny'" in specmend(*heal, plugin_path=None).stderr
 
-    valid = scrapemend("validate", str(spec), plugin_path=site_dir)
+    valid = specmend("validate", str(spec), plugin_path=site_dir)
     assert valid.returncode == 0, valid.stderr
-    healed = scrapemend(*heal, plugin_path=site_dir)
+    healed = specmend(*heal, plugin_path=site_dir)
     assert healed.returncode == 0, healed.stderr
     assert "heal: skipped: no failed run to repair" in healed.stderr  # the provider loaded
 

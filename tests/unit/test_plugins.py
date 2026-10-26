@@ -5,14 +5,14 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-import scrapemend.events as events
-import scrapemend.extract.strategies as strategies
+import specmend.events as events
+import specmend.extract.strategies as strategies
 from examples.plugins.jsonld import JsonLdStrategy
-from scrapemend.cli import app
-from scrapemend.events import Event, StreamNotifier, make_notifier
-from scrapemend.extract import Document, Extractor
-from scrapemend.extract.strategies import UnknownStrategy, build, register_strategy
-from scrapemend.spec import CustomSpec, FieldSpec, parse_spec
+from specmend.cli import app
+from specmend.events import Event, StreamNotifier, make_notifier
+from specmend.extract import Document, Extractor
+from specmend.extract.strategies import UnknownStrategy, build, register_strategy
+from specmend.spec import CustomSpec, FieldSpec, parse_spec
 
 PAGE = """
 <script type="application/ld+json">{"@type": "Organization", "name": "Shop"}</script>
@@ -81,7 +81,7 @@ def test_shorthand() -> None:
 
 def test_entry_point_plugins_are_found_without_import(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake(group: str) -> list[EntryPoint]:
-        return [EntryPoint("jsonld", JsonLdStrategy)] if group == "scrapemend.strategies" else []
+        return [EntryPoint("jsonld", JsonLdStrategy)] if group == "specmend.strategies" else []
 
     monkeypatch.setattr(strategies, "entry_points", fake)
     assert isinstance(
@@ -132,7 +132,7 @@ def test_make_notifier(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         events,
         "entry_points",
-        lambda group: [EntryPoint("pager", Pager)] if group == "scrapemend.notifiers" else [],
+        lambda group: [EntryPoint("pager", Pager)] if group == "specmend.notifiers" else [],
     )
     pager = make_notifier("pager")
     pager.notify(Event(kind="quarantined", source_id="s", message="m"))

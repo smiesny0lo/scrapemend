@@ -1,5 +1,5 @@
 # A hand-written repair of examples/sources/demo-listing.yaml for demo layout v2.
-# scrapemend heal examples/sources/demo-listing.yaml --patch examples/repairs/demo-listing-v2.yaml
+# specmend heal examples/sources/demo-listing.yaml --patch examples/repairs/demo-listing-v2.yaml
 rationale: >
   Layout v2 renamed the listing table's classes (tr.notice -> tr.tender-row,
   td.authority -> td.col-buyer, ...) and replaced the pager list with rel=next links.

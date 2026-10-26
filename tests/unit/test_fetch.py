@@ -6,8 +6,8 @@ from typing import Any
 import httpx
 import pytest
 
-from scrapemend import __version__
-from scrapemend.fetch import (
+from specmend import __version__
+from specmend.fetch import (
     DEFAULT_USER_AGENT,
     BlockedError,
     FetchError,
@@ -16,7 +16,7 @@ from scrapemend.fetch import (
     RobotsDisallowed,
     TransientError,
 )
-from scrapemend.fetch.politeness import parse_retry_after
+from specmend.fetch.politeness import parse_retry_after
 from tests.support import FakeClock
 
 Route = httpx.Response | list[httpx.Response] | Callable[[httpx.Request], httpx.Response]
@@ -73,7 +73,7 @@ def test_identifies_itself(clock: FakeClock) -> None:
     assert (response.status, response.body) == (200, b"<h1>hi</h1>")
     assert site.log[-1].headers["user-agent"] == DEFAULT_USER_AGENT
     assert "text/html" in site.log[-1].headers["accept"]
-    assert DEFAULT_USER_AGENT.startswith(f"scrapemend/{__version__} (+https://")
+    assert DEFAULT_USER_AGENT.startswith(f"specmend/{__version__} (+https://")
 
 
 def test_custom_user_agent(clock: FakeClock) -> None:
@@ -206,7 +206,7 @@ def test_obeys_disallow(clock: FakeClock) -> None:
 @pytest.mark.parametrize(
     ("rules", "allowed"),
     [
-        ("User-agent: scrapemend\nDisallow: /\n", False),
+        ("User-agent: specmend\nDisallow: /\n", False),
         ("User-agent: otherbot\nDisallow: /\n", True),
     ],
 )

@@ -2,9 +2,9 @@ from pathlib import Path
 
 import yaml
 
-from scrapemend.heal.anchors import Anchor
-from scrapemend.heal.context import MAX_TEXT, examples, prune_html, spec_yaml
-from scrapemend.spec import SourceSpec, load_spec
+from specmend.heal.anchors import Anchor
+from specmend.heal.context import MAX_TEXT, examples, prune_html, spec_yaml
+from specmend.spec import SourceSpec, load_spec
 
 DEMO = load_spec(Path(__file__).parents[2] / "examples" / "sources" / "demo.yaml")
 

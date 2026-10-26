@@ -5,14 +5,14 @@ from typing import Any
 
 import pytest
 
-from scrapemend.extract import Document, patterns
-from scrapemend.heal.anchors import Anchor, rank
-from scrapemend.heal.pages import PageFailure
-from scrapemend.heal.verify import SHADOW_SEED, ShadowPlan, VerificationReport, verify
-from scrapemend.pipeline import FieldStats, ListingPage, RunSummary
-from scrapemend.snapshots import SnapshotKind
-from scrapemend.spec import SourceSpec
-from scrapemend.spec.models import HealSpec, ItemSpec
+from specmend.extract import Document, patterns
+from specmend.heal.anchors import Anchor, rank
+from specmend.heal.pages import PageFailure
+from specmend.heal.verify import SHADOW_SEED, ShadowPlan, VerificationReport, verify
+from specmend.pipeline import FieldStats, ListingPage, RunSummary
+from specmend.snapshots import SnapshotKind
+from specmend.spec import SourceSpec
+from specmend.spec.models import HealSpec, ItemSpec
 
 BASE = "https://example.org"
 
@@ -1211,7 +1211,7 @@ def test_listing_only_broken_key_finds_no_anchors() -> None:
 
 
 def test_needs_the_failed_runs_listing_page() -> None:
-    # E.g. `scrapemend promote` pointed at the wrong snapshot directory: without a
+    # E.g. `specmend promote` pointed at the wrong snapshot directory: without a
     # listing page, no listing check could run, so there is no verdict.
     report = run(spec(), FakePages(DETAILS, listing=None))
     assert not report.accepted

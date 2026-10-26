@@ -6,16 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from scrapemend.detect.classify import Failure, Status
-from scrapemend.heal.anchors import Anchor
-from scrapemend.heal.verify import Check, CheckStatus, VerificationReport
-from scrapemend.pipeline import RunSummary
-from scrapemend.retention import prune
-from scrapemend.runs import RunMode, RunReport
-from scrapemend.snapshots import FilesystemSnapshotStore, Snapshot
-from scrapemend.spec import SourceSpec
-from scrapemend.spec.patch import SpecPatch
-from scrapemend.state import State
+from specmend.detect.classify import Failure, Status
+from specmend.heal.anchors import Anchor
+from specmend.heal.verify import Check, CheckStatus, VerificationReport
+from specmend.pipeline import RunSummary
+from specmend.retention import prune
+from specmend.runs import RunMode, RunReport
+from specmend.snapshots import FilesystemSnapshotStore, Snapshot
+from specmend.spec import SourceSpec
+from specmend.spec.patch import SpecPatch
+from specmend.state import State
 
 T0 = datetime(2026, 10, 26, 6, 0, tzinfo=UTC)
 

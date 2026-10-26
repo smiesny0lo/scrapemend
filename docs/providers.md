@@ -4,13 +4,13 @@ A repair provider looks at a broken spec and proposes a fix. Its answer is **dat
 
 ## Built-in providers
 
-<!-- The install hint below uses scrapemend.DISTRIBUTION; tests/unit/test_package.py checks it. -->
+<!-- The install hint below uses specmend.DISTRIBUTION; tests/unit/test_package.py checks it. -->
 
 | Provider | Use |
 |---|---|
-| `none` (default) | proposes nothing. Failures are detected and reported, and a human repairs the spec. scrapemend works fully offline. |
+| `none` (default) | proposes nothing. Failures are detected and reported, and a human repairs the spec. specmend works fully offline. |
 | `--patch FILE` | a repair you wrote by hand, as YAML. It goes through the same gate as any other. |
-| `anthropic` | Claude proposes the repair. Install with `pip install "scrapemend[anthropic]"` and set `ANTHROPIC_API_KEY`. |
+| `anthropic` | Claude proposes the repair. Install with `pip install "specmend[anthropic]"` and set `ANTHROPIC_API_KEY`. |
 
 A hand-written patch looks like `examples/repairs/demo-v2.yaml`:
 
@@ -26,7 +26,7 @@ fields:
 ```
 
 ```sh
-scrapemend heal my-source.yaml --patch my-fix.yaml
+specmend heal my-source.yaml --patch my-fix.yaml
 ```
 
 ## What a patch can change
@@ -54,15 +54,15 @@ The provider sends Claude a **repair context**:
 
 **Pruning** removes scripts, styles and comments, keeps only selector-relevant attributes, shortens long texts, and cuts repeated listing items down to three.
 
-Claude answers with **structured output**: JSON constrained to the schema sent in `output_config.format`, which scrapemend validates, turns into a `SpecPatch` and validates again. If the gate rejects an attempt, its problems are sent back for a second try (`--attempts`, default 2). The unchanged context is served from the prompt cache.
+Claude answers with **structured output**: JSON constrained to the schema sent in `output_config.format`, which specmend validates, turns into a `SpecPatch` and validates again. If the gate rejects an attempt, its problems are sent back for a second try (`--attempts`, default 2). The unchanged context is served from the prompt cache.
 
 Settings:
 
-- **`--model`** or `SCRAPEMEND_ANTHROPIC_MODEL`: the model to use, `claude-opus-5-5` by default.
+- **`--model`** or `SPECMEND_ANTHROPIC_MODEL`: the model to use, `claude-opus-5-5` by default.
 - **Effort** is `high`.
 - **Refusal fallbacks** are enabled through the server-side fallback beta, so a safety decline is retried on a fallback model inside the same call.
 
-In testing, Claude repaired both demo redesigns on the first attempt, with every field reproducing 10/10 anchor values. Those answers are recorded in `tests/fixtures/recorded/` and replayed in CI, where they pass today's gate, shadow run included; the live test (`SCRAPEMEND_LIVE_ANTHROPIC=1`) asks Claude again. scrapemend doesn't report token usage or cost per repair; your Anthropic Console shows both.
+In testing, Claude repaired both demo redesigns on the first attempt, with every field reproducing 10/10 anchor values. Those answers are recorded in `tests/fixtures/recorded/` and replayed in CI, where they pass today's gate, shadow run included; the live test (`SPECMEND_LIVE_ANTHROPIC=1`) asks Claude again. specmend doesn't report token usage or cost per repair; your Anthropic Console shows both.
 
 **Untrusted input.** Page HTML comes from the scraped website. The prompt marks it as data and tells the model to ignore instructions inside it. The patch schema and the gate are the real defence: even a manipulated answer can only propose selectors and strategies, its regexes run on RE2, and the result must reproduce the last good run's records in a shadow run over the source (see [what the gate guarantees](verification.md#what-the-gate-guarantees), and [what it can't catch](verification.md#what-it-cant-catch)).
 
@@ -71,8 +71,8 @@ In testing, Claude repaired both demo redesigns on the first attempt, with every
 A provider is any object with a `name` and a `propose` method:
 
 ```python
-from scrapemend.heal.context import RepairContext
-from scrapemend.spec.patch import SpecPatch
+from specmend.heal.context import RepairContext
+from specmend.spec.patch import SpecPatch
 
 
 class MyProvider:
@@ -88,13 +88,13 @@ class MyProvider:
 ```
 
 - Return `None` when you have nothing (more) to suggest.
-- Raise `scrapemend.heal.providers.ProviderError` when you can't produce a repair, for example when an API fails.
+- Raise `specmend.heal.providers.ProviderError` when you can't produce a repair, for example when an API fails.
 - `rationale` and `confidence` (0–1) on the patch are shown to whoever reviews it. Confidence below 0.5 also blocks automatic promotion.
 - The regexes of your provider's patches run on RE2, like Claude's.
 
 Register the provider in your plugin package's `pyproject.toml`, then use `--provider my-provider`:
 
 ```toml
-[project.entry-points."scrapemend.providers"]
+[project.entry-points."specmend.providers"]
 my-provider = "my_package.providers:MyProvider"
 ```

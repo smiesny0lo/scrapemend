@@ -1,12 +1,12 @@
-"""The scrapemend demo in one command: watch a scraper break and heal itself.
+"""The specmend demo in one command: watch a scraper break and heal itself.
 
     python examples/run_demo.py                       # offline, with a hand-written repair
     python examples/run_demo.py --provider anthropic  # Claude writes the repair
     python examples/run_demo.py --layout 3            # the harder redesign
 
-It starts the demo site, scrapes it, redesigns the site, and lets scrapemend detect
+It starts the demo site, scrapes it, redesigns the site, and lets specmend detect
 the breakage, repair the spec, verify the repair against known-good records,
-promote it and scrape again, all through the real `scrapemend` CLI. It exits
+promote it and scrape again, all through the real `specmend` CLI. It exits
 non-zero if any step doesn't do what it should, so CI runs it too.
 """
 
@@ -43,11 +43,11 @@ def shown(arg: str) -> str:
     return arg
 
 
-def scrapemend(*args: str, expect: int = 0) -> str:
+def specmend(*args: str, expect: int = 0) -> str:
     """Run the CLI, show what it reports, and check its exit code."""
-    print(f"$ scrapemend {' '.join(shown(a) for a in args)}", flush=True)
+    print(f"$ specmend {' '.join(shown(a) for a in args)}", flush=True)
     done = subprocess.run(
-        [sys.executable, "-m", "scrapemend", *args],
+        [sys.executable, "-m", "specmend", *args],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -100,14 +100,14 @@ def main() -> None:
                 break
             except httpx.HTTPError:
                 time.sleep(0.1)
-        with tempfile.TemporaryDirectory(prefix="scrapemend-demo-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="specmend-demo-") as tmp:
             global WORK
             work = WORK = Path(tmp)
             state = ["--db", str(work / "state.db"), "--snapshots", str(work / "snapshots")]
             where = ["--start", f"{base}/notices", *state]
 
             say(f"1. The demo site is up at {base}. Scrape it with examples/sources/demo.yaml")
-            scrapemend("run", str(SPEC), "--out", str(work / "before.jsonl"), *where)
+            specmend("run", str(SPEC), "--out", str(work / "before.jsonl"), *where)
 
             say(f"2. The site is redesigned (layout v{args.layout}); the spec now finds nothing")
             httpx.post(f"{base}/admin/layout/{args.layout}")
@@ -116,20 +116,20 @@ def main() -> None:
                 if args.provider
                 else ["--patch", str(ROOT / "examples" / "repairs" / f"demo-v{args.layout}.yaml")]
             )
-            report = scrapemend(
+            report = specmend(
                 "run", str(SPEC), "--out", str(work / "broken.jsonl"), *repair, *where, expect=3
             )
             if "status: layout_changed" not in report or "heal: proposed" not in report:
                 sys.exit("demo failed: expected a detected layout change and a verified repair")
 
             say("3. What the verified repair changes (it waits for a human to promote it)")
-            scrapemend("diff", str(SPEC), "1", *state[:2])
+            specmend("diff", str(SPEC), "1", *state[:2])
 
             say("4. Promote it: the repaired spec becomes version 2")
-            scrapemend("promote", str(SPEC), "1", *state)  # verified again from snapshots
+            specmend("promote", str(SPEC), "1", *state)  # verified again from snapshots
 
             say("5. Scrape the redesigned site again")
-            scrapemend("run", str(SPEC), "--out", str(work / "after.jsonl"), *where)
+            specmend("run", str(SPEC), "--out", str(work / "after.jsonl"), *where)
 
             before = [
                 json.loads(line) for line in (work / "before.jsonl").read_text("utf-8").splitlines()

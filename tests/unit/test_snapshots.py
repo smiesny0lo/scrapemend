@@ -10,10 +10,10 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from examples.mutating_site.app import create_app
-from scrapemend.extract import Extractor
-from scrapemend.runs import new_run_id
-from scrapemend.snapshots import FilesystemSnapshotStore, Snapshot, SnapshotStore, decode_body
-from scrapemend.spec import load_spec
+from specmend.extract import Extractor
+from specmend.runs import new_run_id
+from specmend.snapshots import FilesystemSnapshotStore, Snapshot, SnapshotStore, decode_body
+from specmend.spec import load_spec
 
 RUN = "20261013T190512Z-3f9a"
 HTML = "text/html; charset=utf-8"

@@ -14,19 +14,19 @@ In a spec, pick a value by its path, optionally only from objects of one @type:
         - custom: { name: jsonld, options: { path: offers.price, type: Product } }
         - css: "span.price"
 
-A plugin package registers the strategy in its pyproject.toml, so scrapemend finds
+A plugin package registers the strategy in its pyproject.toml, so specmend finds
 it without any import:
 
-    [project.entry-points."scrapemend.strategies"]
+    [project.entry-points."specmend.strategies"]
     jsonld = "examples.plugins.jsonld:JsonLdStrategy"
 
-or, in Python, with scrapemend.extract.strategies.register_strategy("jsonld", ...).
+or, in Python, with specmend.extract.strategies.register_strategy("jsonld", ...).
 """
 
 import json
 from typing import Any
 
-from scrapemend.extract import Document
+from specmend.extract import Document
 
 
 class JsonLdStrategy:

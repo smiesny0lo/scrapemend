@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from scrapemend.spec import (
+from specmend.spec import (
     CssSpec,
     LabelSpec,
     RegexSpec,

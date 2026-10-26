@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from scrapemend.cli import app
-from scrapemend.spec import Problem, SpecError, load_spec, parse_spec
+from specmend.cli import app
+from specmend.spec import Problem, SpecError, load_spec, parse_spec
 
 DEMO_SPEC = Path(__file__).parents[2] / "examples" / "sources" / "demo.yaml"
 

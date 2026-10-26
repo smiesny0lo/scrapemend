@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in scrapemend. For architectural changes, please open an issue to discuss before sending a PR.
+Thanks for your interest in specmend. For architectural changes, please open an issue to discuss before sending a PR.
 
 ## Setup
 
@@ -19,7 +19,7 @@ mypy
 pytest
 ```
 
-The tests never call the Anthropic API: the anthropic provider is tested against recorded answers. To check that Claude still repairs the demo redesigns through the gate (a few API calls), set `ANTHROPIC_API_KEY` and `SCRAPEMEND_LIVE_ANTHROPIC=1`, and run `pytest -k live`.
+The tests never call the Anthropic API: the anthropic provider is tested against recorded answers. To check that Claude still repairs the demo redesigns through the gate (a few API calls), set `ANTHROPIC_API_KEY` and `SPECMEND_LIVE_ANTHROPIC=1`, and run `pytest -k live`.
 
 ## Ground rules
 

@@ -1,5 +1,6 @@
-# Review attack S2 on layout v2: status only knows the values of the examples a
-# provider was shown (Open, Closed), so every Awarded status (39 of 200) is empty.
+# Review attack S2 on layout v2: status only knows Open and Closed, the values of the
+# examples a provider was shown in that review, so every Awarded status (39 of 200)
+# is empty.
 rationale: 'v2: status is Open or Closed'
 confidence: 0.9
 container:

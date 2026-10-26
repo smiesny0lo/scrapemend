@@ -53,7 +53,7 @@ def create_app(
     if failure_rate is None:
         failure_rate = float(os.environ.get("CHAOS_FAILURE_RATE", DEFAULT_FAILURE_RATE))
 
-    app = FastAPI(title="scrapemend demo site")
+    app = FastAPI(title="specmend demo site")
     app.state.layout = _check_layout(layout)
     app.state.chaos = Chaos(parse_modes(chaos), failure_rate)
 

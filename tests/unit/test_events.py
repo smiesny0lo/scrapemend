@@ -3,7 +3,7 @@ import logging
 
 import pytest
 
-from scrapemend.events import Event, LogNotifier, Notifier, Notifiers, StreamNotifier
+from specmend.events import Event, LogNotifier, Notifier, Notifiers, StreamNotifier
 
 EVENT = Event(kind="run_failed", source_id="demo", message="layout_changed: container", run_id="r1")
 
@@ -15,14 +15,14 @@ def test_stream_notifier() -> None:
 
 
 def test_log_notifier(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.INFO, logger="scrapemend"):
+    with caplog.at_level(logging.INFO, logger="specmend"):
         LogNotifier().notify(EVENT)
         LogNotifier().notify(Event(kind="run_recovered", source_id="demo", message="good again"))
     assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
         ("ERROR", "demo: run_failed: layout_changed: container"),
         ("INFO", "demo: run_recovered: good again"),
     ]
-    assert caplog.records[0].scrapemend_event["run_id"] == "r1"  # type: ignore[attr-defined]
+    assert caplog.records[0].specmend_event["run_id"] == "r1"  # type: ignore[attr-defined]
 
 
 class Broken:

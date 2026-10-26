@@ -1,4 +1,4 @@
-"""The installed `scrapemend` executable, run as a real process (not through CliRunner,
+"""The installed `specmend` executable, run as a real process (not through CliRunner,
 which replaces the output streams), and the demo script that runs it the same way.
 
 On Windows a process writing to a pipe uses the legacy code page unless told
@@ -16,8 +16,8 @@ from pathlib import Path
 import pytest
 
 from examples import run_demo
-from scrapemend.spec import load_spec
-from scrapemend.state import State
+from specmend.spec import load_spec
+from specmend.state import State
 
 pytestmark = pytest.mark.integration
 
@@ -34,8 +34,8 @@ def plain_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
 
 
 def executable() -> str:
-    found = shutil.which("scrapemend", path=sysconfig.get_path("scripts"))
-    assert found, "the scrapemend script is not installed: pip install -e ."
+    found = shutil.which("specmend", path=sysconfig.get_path("scripts"))
+    assert found, "the specmend script is not installed: pip install -e ."
     return found
 
 
@@ -70,6 +70,6 @@ def test_demo_reads_non_ascii_cli_output(
     # The step that crashed: the demo printing a repair (a regex with "€") from the CLI.
     db = tmp_path / "state.db"
     State(db).specs.register(load_spec(DEMO_SPEC))
-    output = run_demo.scrapemend("show", str(DEMO_SPEC), "--db", str(db))
+    output = run_demo.specmend("show", str(DEMO_SPEC), "--db", str(db))
     assert r"(€\s?[\d,.]+)" in output
     assert r"(€\s?[\d,.]+)" in capsys.readouterr().out

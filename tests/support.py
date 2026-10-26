@@ -12,7 +12,7 @@ from typing import Any
 import uvicorn
 from starlette.types import ASGIApp
 
-from scrapemend.heal.providers.anthropic import RepairOutput
+from specmend.heal.providers.anthropic import RepairOutput
 
 RECORDED = Path(__file__).parent / "fixtures" / "recorded"
 

@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from scrapemend.detect.classify import Failure, Status
-from scrapemend.heal.anchors import Anchor
-from scrapemend.pipeline import RunSummary
-from scrapemend.runner import ConfirmRefused, accept_drift, confirm
-from scrapemend.runs import RunReport
-from scrapemend.spec import SourceSpec
-from scrapemend.state import State
+from specmend.detect.classify import Failure, Status
+from specmend.heal.anchors import Anchor
+from specmend.pipeline import RunSummary
+from specmend.runner import ConfirmRefused, accept_drift, confirm
+from specmend.runs import RunReport
+from specmend.spec import SourceSpec
+from specmend.state import State
 
 T0 = datetime(2026, 10, 26, 9, 0, tzinfo=UTC)
 
