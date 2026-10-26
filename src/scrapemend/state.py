@@ -1,5 +1,5 @@
 """Local state in one SQLite file: runs, baselines, anchors and the last good run's
-records, spec versions, proposals.
+records (and a drift run's, until it is accepted), spec versions, proposals.
 
 Every table is created on first use, so an older database simply gains the tables
 a newer version needs. Stores share one connection; each write commits at once.
@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS good_records (
     key       TEXT NOT NULL,
     fields    TEXT NOT NULL,         -- field -> value as anchors store it, as JSON
     PRIMARY KEY (source_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS held_baselines (
+    source_id TEXT PRIMARY KEY,
+    run_id    TEXT NOT NULL,         -- the latest drift run, until accepted or an ok run
+    anchors   TEXT NOT NULL,         -- its anchors, as a JSON list
+    records   TEXT NOT NULL          -- its valid records, key -> field -> value, as JSON
 );
 
 CREATE TABLE IF NOT EXISTS spec_versions (

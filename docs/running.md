@@ -8,6 +8,7 @@
 | `scrapemend run SPEC [--out FILE]` | scrape with the active spec version, write JSON lines, judge the run, heal per `heal.mode` |
 | `scrapemend check SPEC [--sample 5]` | scrape a small sample and judge it; writes no records, never changes the baseline, never heals |
 | `scrapemend runs [SOURCE_ID]` | run history, newest first |
+| `scrapemend accept-drift RUN_ID` | make a drift run the last good run, once you have checked its data (see [drift](#drift)) |
 | `scrapemend heal SPEC [--provider P \| --patch FILE]` | repair the latest failed run, verify the repair (with a shadow run over the source), promote it or leave it for review |
 | `scrapemend proposals SPEC` | repair proposals with their verification score |
 | `scrapemend diff SPEC ID` | what proposal ID would change, as a diff of the spec |
@@ -34,7 +35,7 @@ Everything scrapemend prints, records and reports alike, is UTF-8 on every platf
 
 ## What a run reports
 
-Every run is compared with the **last good run**, the latest complete run whose status was `ok` or `drift`:
+Every run is compared with the **last good run**: the latest complete run whose status was `ok`, or a `drift` run you accepted (see [drift](#drift)):
 
 | Status | Signal | Exit code |
 |---|---|---|
@@ -60,7 +61,23 @@ status: layout_changed
 
 **Warnings** don't fail a run but still alert. For example, *fields working only through fallback strategies* means the data is fine, but the page is starting to change.
 
-Only a complete, good run of `scrapemend run` updates the baseline: the page fingerprints and the anchors. `check` and `--limit` runs never do.
+Only a complete `ok` run of `scrapemend run` updates the baseline: the last good run, its page fingerprints, its anchors and its records. `check` and `--limit` runs never do, and neither does a `drift` run.
+
+### Drift
+
+A `drift` run writes its records and exits with 0, but alerts: its data is distributed unlike the last good run's. That may be the world changing (statuses renamed, a new kind of notice), or a repair that is wrong on some records (see [what the gate can't catch](verification.md#what-it-cant-catch)). scrapemend can't tell which, so a drift run doesn't become the baseline. The runs after it are compared with the same last good run as before, so while the data stays like this they drift too, and alert on every run, until you decide:
+
+```
+status: drift
+  drift: value: 15% of its values have another number of digits than in the last good run (7 digits: 0%, was 15%)
+    failing: value
+  the last good run stays the baseline: runs keep drifting until you check this data and accept it with: scrapemend accept-drift 20261026T090000Z-3f9a
+```
+
+- If the data is right, accept the run: `scrapemend accept-drift RUN_ID` makes it the last good run, with its page fingerprints, anchors and records. The runs after it are compared with it.
+- If it is wrong, fix the spec (roll back, or write a new version) and run again.
+
+Only the latest drift run since the last good run can be accepted: its anchors and records are kept until then. An `ok` run in between becomes the last good run instead, and nothing older can be accepted.
 
 ## Politeness
 

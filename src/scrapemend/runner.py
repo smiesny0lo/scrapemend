@@ -38,8 +38,10 @@ def run_source(
     """Crawl a source and judge the result.
 
     Valid records are passed to `on_record` as they arrive (invalid ones too with
-    `keep_invalid`). Only a complete, good run of mode "run" becomes the new baseline
-    and refreshes the source's anchors and known records.
+    `keep_invalid`). Only a complete ok run of mode "run" becomes the new baseline
+    and refreshes the source's anchors and known records. A drift run doesn't: the
+    runs after it are compared with the same last good run, and keep drifting, until
+    a human accepts its drift (accept_drift), for which its anchors are held.
     """
     runs = state.runs
     started = datetime.now(UTC)
@@ -114,14 +116,54 @@ def run_source(
         error=str(error) if error else None,
     )
     runs.save(report)
-    if mode == "run" and complete and report.good:
-        for kind, prints in summary.fingerprints.items():
-            if prints:
-                runs.set_baseline(spec.id, kind, prints[0], summary.run_id)
+    if complete and report.status == "ok":
+        _set_fingerprints(runs, summary)
         state.anchors.replace(spec.id, picker.anchors(), picker.records())
+    elif complete and report.status == "drift":
+        state.anchors.hold(spec.id, summary.run_id, picker.anchors(), picker.records())
     if notifier is not None:
         _notify(notifier, report, previous)
     return report
+
+
+class DriftNotAccepted(ValueError):
+    """A run can't be accepted: it isn't the latest drift run since the last good run."""
+
+
+def accept_drift(state: State, run_id: str) -> RunReport:
+    """Make a drift run the baseline, because a human checked that its data is right:
+    the runs after it, and repairs, are compared with it. Its anchors and records
+    must still be held, which they are for the latest drift run since the last good
+    run. The run keeps its status; it is marked accepted."""
+    report = state.runs.get(run_id)
+    if report is None:
+        raise DriftNotAccepted(f"there is no run {run_id}")
+    if report.status != "drift":
+        raise DriftNotAccepted(
+            f"run {run_id} is {report.status}, not drift: only a drift run can be accepted"
+        )
+    if report.accepted_at is not None:
+        raise DriftNotAccepted(f"run {run_id} was accepted already")
+    good = state.runs.last_good(report.source_id)
+    if good is not None and good.started_at > report.started_at:
+        raise DriftNotAccepted(f"run {run_id} is older than the last good run, {good.run_id}")
+    held = state.anchors.held(report.source_id)
+    if held != run_id:
+        if held is None:
+            raise DriftNotAccepted(f"run {run_id}'s records were not kept, so it can't be accepted")
+        raise DriftNotAccepted(
+            f"only the latest drift run's records are kept: review run {held} and accept it"
+        )
+    state.anchors.accept(report.source_id, run_id)
+    _set_fingerprints(state.runs, report.summary)
+    return state.runs.accept(run_id, datetime.now(UTC))
+
+
+def _set_fingerprints(runs: RunStore, summary: RunSummary) -> None:
+    """Make a run's page fingerprints the ones later runs' pages are compared with."""
+    for kind, prints in summary.fingerprints.items():
+        if prints:
+            runs.set_baseline(summary.source_id, kind, prints[0], summary.run_id)
 
 
 def _structure(runs: RunStore, source_id: str, summary: RunSummary) -> dict[str, float]:

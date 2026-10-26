@@ -1,6 +1,7 @@
 """Run metadata: what each run found, kept in the SQLite runs table."""
 
 import sqlite3
+from datetime import datetime
 from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, Field
@@ -12,7 +13,7 @@ from scrapemend.pipeline import RunSummary
 __all__ = ["RunMode", "RunReport", "RunStore", "new_run_id"]
 
 RunMode = Literal["run", "check"]
-GOOD: tuple[Status, ...] = ("ok", "drift")  # runs whose data can be trusted
+GOOD: tuple[Status, ...] = ("ok", "drift")  # runs that didn't fail (drift alerts, unrepaired)
 
 
 class RunReport(BaseModel):
@@ -30,6 +31,7 @@ class RunReport(BaseModel):
     structure: dict[str, float] = Field(default_factory=dict)  # kind -> similarity to baseline
     diagnosis: Diagnosis | None = None
     error: str | None = None  # why the crawl stopped early, if it did
+    accepted_at: AwareDatetime | None = None  # a drift run a human made the baseline
 
     @property
     def good(self) -> bool:
@@ -75,17 +77,30 @@ class RunStore:
         return [RunReport.model_validate_json(row["report"]) for row in rows]
 
     def last_good(self, source_id: str) -> RunReport | None:
-        """The latest complete run whose data can be trusted: the baseline to compare to."""
+        """The baseline later runs and repairs are compared with: the latest complete
+        run that was ok, or whose drift a human accepted (see runner.accept_drift).
+        Until then a drift run is not: the runs after it are compared with the same
+        last good run as it was, so they keep drifting, and alerting."""
         rows = self.db.execute(
-            "SELECT report FROM runs WHERE source_id = ? AND mode = 'run' AND status IN (?, ?)"
+            "SELECT report FROM runs WHERE source_id = ? AND mode = 'run' AND (status = 'ok'"
+            " OR (status = 'drift' AND json_extract(report, '$.accepted_at') IS NOT NULL))"
             " ORDER BY started_at DESC",
-            (source_id, *GOOD),
+            (source_id,),
         )
         for row in rows:
             report = RunReport.model_validate_json(row["report"])
             if report.complete:
                 return report
         return None
+
+    def accept(self, run_id: str, at: datetime) -> RunReport:
+        """Mark a drift run as accepted by a human, which makes it the last good run."""
+        report = self.get(run_id)
+        if report is None:
+            raise KeyError(run_id)
+        accepted = report.model_copy(update={"accepted_at": at})
+        self.save(accepted)
+        return accepted
 
     def latest(self, source_id: str) -> RunReport | None:
         reports = self.recent(source_id, limit=1)

@@ -12,6 +12,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -546,6 +547,60 @@ def test_a_wrong_repair_promoted_anyway_shows_as_drift(
     assert report.status == "drift"
     assert any(f.message.startswith(drift) for f in report.failures), report.failures
     assert world.events.kinds[0] == "drift"
+
+
+def test_drift_alerts_on_every_run_until_a_human_accepts_it(world: World, tmp_path: Path) -> None:
+    # A bad repair forced past the gate. A drift run used to become the baseline, so
+    # only the first run after it alerted: the next one compared the wrong values
+    # with the wrong values and said ok. Now every run is compared with the last ok
+    # run, and drifts, until `scrapemend accept-drift` makes a drift run the baseline.
+    good = world.state.runs.last_good("tenders-demo")
+    assert good is not None
+    world.layout(2)
+    active = world.state.specs.active("tenders-demo")
+    assert active is not None
+    wrong = load_patch(BAD / "v2-value-drops-millions.yaml").apply(active.spec, version=2)
+    world.state.specs.add(wrong, "repair", "forced past the gate")
+    world.state.specs.activate("tenders-demo", 2)
+
+    drifted = [world.run(), world.run()]
+    by_cli = cli_run(world, "run", "--out", str(tmp_path / "out.jsonl"))
+    assert by_cli.exit_code == 0, by_cli.output  # drift alerts, but the data is written
+    latest = world.state.runs.latest("tenders-demo")
+    assert latest is not None
+    drifted.append(latest)
+    assert [r.status for r in drifted] == ["drift", "drift", "drift"]
+    assert f"scrapemend accept-drift {latest.run_id}" in by_cli.output
+    alerts = [[e.message for e in world.events.events if e.run_id == r.run_id] for r in drifted[:2]]
+    assert alerts[0] and alerts[0] == alerts[1]  # the same alert on every run
+    assert set(world.events.kinds) == {"drift"}
+    # The last good run, its anchors and its records stay what they were.
+    still = world.state.runs.last_good("tenders-demo")
+    assert still is not None and still.run_id == good.run_id
+    assert {a.run_id for a in world.state.anchors.all("tenders-demo")} == {good.run_id}
+
+    def accept(run_id: str) -> Any:
+        return CliRunner().invoke(cli, ["accept-drift", run_id, "--db", str(world.db)])
+
+    older = accept(drifted[0].run_id)
+    assert older.exit_code == 1
+    assert f"review run {latest.run_id} and accept it" in older.output
+    accepted = accept(latest.run_id)
+    assert accepted.exit_code == 0, accepted.output
+    assert accepted.output.strip() == (
+        f"tenders-demo: drift run {latest.run_id} accepted: later runs and repairs are "
+        "compared with its 200 records"
+    )
+    now = world.state.runs.last_good("tenders-demo")
+    assert now is not None and (now.run_id, now.spec_version) == (latest.run_id, 2)
+    assert {a.run_id for a in world.state.anchors.all("tenders-demo")} == {latest.run_id}
+    known = world.state.anchors.records("tenders-demo")
+    values = [Decimal(str(r["value"])) for r in known.values() if r["value"] is not None]
+    assert len(known) == 200 and max(values) < 1_000_000  # the millions dropped, as accepted
+
+    world.events.events.clear()
+    after = world.run()
+    assert (after.status, world.events.kinds) == ("ok", [])
 
 
 # --- regexes ---------------------------------------------------------------------------------

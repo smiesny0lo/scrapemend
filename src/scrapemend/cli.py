@@ -32,7 +32,7 @@ from scrapemend.heal.ladder import (
 from scrapemend.heal.pages import PageSource
 from scrapemend.heal.providers import PatchProvider, ProviderError, RepairProvider, make_provider
 from scrapemend.pipeline import ValidatedRecord
-from scrapemend.runner import run_source
+from scrapemend.runner import DriftNotAccepted, accept_drift, run_source
 from scrapemend.runs import RunReport
 from scrapemend.snapshots import FilesystemSnapshotStore
 from scrapemend.spec import SourceSpec, SpecError, load_patch, load_spec
@@ -441,6 +441,25 @@ def show(
     typer.echo(spec_yaml(found.spec).rstrip())
 
 
+@app.command(name="accept-drift")
+def accept_drift_command(
+    run_id: Annotated[str, typer.Argument(help="A drift run whose data you checked.")],
+    db: DbOption = DEFAULT_DB,
+) -> None:
+    """Make a drift run the last good run, once you have checked that its data is
+    right: later runs and repairs are compared with it. Until then every run is
+    compared with the last good run before it, and keeps drifting and alerting."""
+    state = State(db)
+    try:
+        report = accept_drift(state, run_id)
+    except DriftNotAccepted as e:
+        _fail(str(e))
+    typer.echo(
+        f"{report.source_id}: drift run {run_id} accepted: later runs and repairs are "
+        f"compared with its {report.summary.valid_records} records"
+    )
+
+
 @app.command()
 def runs(
     source_id: Annotated[str | None, typer.Argument(help="Only runs of this source.")] = None,
@@ -618,5 +637,10 @@ def _print_report(report: RunReport, fetcher: HttpFetcher, snapshots: Path) -> N
         err(f"  {f.category}: {f.message}")
         if f.fields:
             err(f"    failing: {', '.join(f.fields)}")
+    if report.status == "drift":
+        err(
+            "  the last good run stays the baseline: runs keep drifting until you check this "
+            f"data and accept it with: scrapemend accept-drift {report.run_id}"
+        )
     for warning in report.warnings:
         err(f"  warning: {warning}")

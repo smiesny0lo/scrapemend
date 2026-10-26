@@ -46,7 +46,9 @@ def test_recent_newest_first(tmp_path: Path) -> None:
     assert latest is not None and latest.run_id == "run3"
 
 
-def test_last_good_skips_failures_checks_and_partial_runs(tmp_path: Path) -> None:
+def test_last_good_skips_failures_drift_checks_and_partial_runs(tmp_path: Path) -> None:
+    # Only an ok run becomes the baseline. A drift run used to (run2 here), so the run
+    # after it was compared with the drifted data and said ok.
     runs = RunStore(connect(tmp_path / "state.db"))
     runs.save(report(1))
     runs.save(report(2, "drift"))
@@ -54,7 +56,21 @@ def test_last_good_skips_failures_checks_and_partial_runs(tmp_path: Path) -> Non
     runs.save(report(4, mode="check"))
     runs.save(report(5, complete=False))
     good = runs.last_good("demo")
-    assert good is not None and good.run_id == "run2"
+    assert good is not None and good.run_id == "run1"
+
+
+def test_a_drift_run_is_the_last_good_run_once_accepted(tmp_path: Path) -> None:
+    runs = RunStore(connect(tmp_path / "state.db"))
+    runs.save(report(1))
+    runs.save(report(2, "drift"))
+    runs.save(report(3, "drift"))
+    accepted = runs.accept("run2", T0 + timedelta(days=1))
+    assert accepted.accepted_at == T0 + timedelta(days=1)
+    good = runs.last_good("demo")
+    assert good is not None and good.run_id == "run2" and good.status == "drift"
+    runs.save(report(4))
+    good = runs.last_good("demo")
+    assert good is not None and good.run_id == "run4"
 
 
 def test_baselines(tmp_path: Path) -> None:
