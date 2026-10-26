@@ -365,6 +365,65 @@ def test_a_volatile_field_may_change_on_few_records(changed: int, accepted: bool
         ]
 
 
+def price_reads(pages: dict[str, str], wrong: dict[int, str]) -> dict[str, str]:
+    """The pages, with the price of the detail pages numbered in `wrong` replaced."""
+    out = dict(pages)
+    for i, price in wrong.items():
+        out[f"{BASE}/d/{i}"] = detail(f"Title {i}", f"City {i % 4}", price)
+    return out
+
+
+def test_a_number_field_wrong_only_on_its_largest_values_is_rejected() -> None:
+    # Review attack B1: a regex that loses the leading digits of the largest amounts.
+    # 5 of 100 prices changed is within the 10% a volatile field may change by, but
+    # they are the 5 largest: prices that really changed don't pick the largest.
+    wrong = price_reads(page_set(100), {i: str(i)[1:] for i in range(95, 100)})
+    report, _ = run_pages(spec(), details=wrong)
+    assert report.shadow is not None and report.shadow.fields["price"].changed == 5
+    assert report.problems == [
+        "price changed on 5 of the 10 records where it was largest in the last good run, "
+        "against 0 of the other 90: a strategy may misread large numbers; expected '99', "
+        "got '9'"
+    ]
+
+
+def test_a_number_field_wrong_only_on_its_smallest_values_is_rejected() -> None:
+    wrong = price_reads(page_set(100), {i: f"9{i}" for i in range(5)})
+    report, _ = run_pages(spec(), details=wrong)
+    assert report.problems == [
+        "price changed on 5 of the 10 records where it was smallest in the last good run, "
+        "against 0 of the other 90: a strategy may misread small numbers; expected '0', "
+        "got '90'"
+    ]
+
+
+def test_changes_that_chance_puts_among_the_largest_values_are_fine() -> None:
+    # 5 of 100 prices changed, 2 of them among the 10 largest: 20% of those, but that
+    # happens one time in twelve when one price in twenty changed anywhere.
+    wrong = price_reads(page_set(100), {i: f"9{i}" for i in (20, 30, 40, 98, 99)})
+    report, _ = run_pages(spec(), details=wrong)
+    assert report.accepted, report.problems
+    assert report.shadow is not None and report.shadow.fields["price"].changed == 5
+
+
+def test_a_sample_reads_every_value_of_a_field_with_few_values() -> None:
+    # Review attack B3's shape: a stable field wrong only on the records of one rare
+    # value, here one notice in Fenwick Vale that reads "Vale". A sample of 20 of 100
+    # records drew 20 at random; now it reads a record of every value of city too.
+    details = page_set(100) | {f"{BASE}/d/55": detail("Title 55", "Vale", "55")}
+    known = {a.key: a.values for a in anchors_for(details, list(details))}
+    known[f"{BASE}/d/55"] = known[f"{BASE}/d/55"] | {"city": "Fenwick Vale"}
+    cities = FieldStats(filled=100, domain=[*(f"City {i}" for i in range(4)), "Fenwick Vale"])
+    baseline = BASELINE.model_copy(
+        update={"listing_pages": 10, "items": 100, "fields": {"city": cities}}
+    )
+    report, _ = run_pages(sampling(20), details=details, baseline=baseline, known=known)
+    assert report.problems == [
+        "city reproduces 20/21 values of the last good run (needs 100%); "
+        "expected 'Fenwick Vale', got 'Vale'"
+    ]
+
+
 def test_volatile_change_is_configurable() -> None:
     prices = {
         u: new_price(html) if 20 <= i < 26 else html for i, (u, html) in enumerate(DETAILS.items())

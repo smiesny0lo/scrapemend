@@ -58,8 +58,10 @@ unverified: fail closed. It is never promoted automatically, and only `promote
 --force` can promote it, never past a check that failed.
 """
 
+import math
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from decimal import Decimal, InvalidOperation
 from itertools import combinations
 from typing import Literal
 
@@ -90,6 +92,8 @@ MAX_UNKNOWN_SHARE = 0.5  # of those, the share that may be new since the last go
 MIN_SHADOW_RECORDS = 20  # records to compare (all of them, if the last good run had fewer)
 SHADOW_SEED = "scrapemend-shadow"  # draws the shadow run's sample, when it samples
 EXAMPLES = 3  # mismatches kept per field (and kind, in the shadow run)
+EXTREMES = 10  # records at each end of a number field that the shadow run judges on their own
+CHANCE = 0.001  # what happens less often than this by chance alone is no chance
 
 CheckStatus = Literal["passed", "failed", "not run"]
 
@@ -703,7 +707,10 @@ def _shadow(
         on_shadow(_plan(spec, pages, first, known, baseline, cap if sampled else None))
     crawl = _Crawl(spec, pages, extractor, run)
     comparison = _Comparison(spec, known, baseline, run)
-    records = crawl.sample(first, cap) if cap is not None and sampled else crawl.all(first)
+    if cap is not None and sampled:
+        records = crawl.sample(first, cap, known, baseline)
+    else:
+        records = crawl.all(first)
     for key, result in records:
         comparison.add(key, result)
     if crawl.unavailable is not None:
@@ -774,11 +781,11 @@ def _plan(
         walked = _stored_walk(spec, pages, first)
         if walked is not None:
             keys = [key for doc in walked for key, _ in _items(spec, doc) if key is not None]
-            chosen = _choose(keys, cap)
+            chosen = _choose(spec, keys, known, baseline, cap)
             listing_pages, records = len(walked), len(chosen)
             stored = len(walked) + sum(key in details for key in chosen)
-        else:
-            records = len(_choose(known, cap))
+        else:  # as if every record of the last good run were still listed
+            records = len(_choose(spec, known, known, baseline, cap))
             stored = min(len(listings), listing_pages)
         detail_pages = records
     return ShadowPlan(
@@ -810,10 +817,89 @@ def _stored_walk(spec: SourceSpec, pages: Pages, first: Document) -> list[Docume
     return walked
 
 
-def _choose(keys: Iterable[str], cap: int) -> list[str]:
-    """The records a sample reads from the items of every listing page: `cap` of
-    them, at random with a fixed seed."""
-    return sorted(dict.fromkeys(keys), key=lambda key: rank(key, SHADOW_SEED))[:cap]
+def _choose(
+    spec: SourceSpec,
+    keys: Iterable[str],
+    known: KnownRecords,
+    baseline: RunSummary | None,
+    cap: int,
+) -> list[str]:
+    """The records a sample reads, from the items of every listing page. First, of
+    the last good run's records among them, those a rule judges on their own: the
+    EXTREMES with the largest and the smallest values of each number field, and a
+    record of every kind (_kinds). Then others at random, with a fixed seed, up to
+    `cap` in all (or more, if those are more). In that random order."""
+    ranked = sorted(dict.fromkeys(keys), key=lambda key: rank(key, SHADOW_SEED))
+    had = [key for key in ranked if key in known]
+    chosen = {key for members in _extremes(spec, known, had).values() for key in members}
+    for members in _kinds(spec, known, baseline, had).values():
+        if chosen.isdisjoint(members):
+            chosen.add(members[0])
+    for key in ranked:
+        if len(chosen) >= cap:
+            break
+        chosen.add(key)
+    return [key for key in ranked if key in chosen]
+
+
+def _extremes(
+    spec: SourceSpec, known: KnownRecords, keys: Iterable[str]
+) -> dict[tuple[str, str], list[str]]:
+    """For each number field, the EXTREMES records among `keys` (the last good run's)
+    where its value was largest then, and those where it was smallest: (field,
+    "largest" or "smallest") -> their keys, the most extreme first. A pattern that is
+    too narrow for long or short numbers misreads exactly those."""
+    out: dict[tuple[str, str], list[str]] = {}
+    keys = list(keys)
+    for name, field in spec.fields.items():
+        if field.type not in ("int", "decimal"):
+            continue
+        valued = [(n, key) for key in keys if (n := _number(known[key].get(name))) is not None]
+        if valued:
+            ordered = sorted(valued, key=lambda pair: pair[0])
+            out[name, "largest"] = [key for _, key in ordered[::-1][:EXTREMES]]
+            out[name, "smallest"] = [key for _, key in ordered[:EXTREMES]]
+    return out
+
+
+def _number(value: AnchorValue) -> Decimal | None:
+    try:
+        return None if value is None else Decimal(str(value))
+    except InvalidOperation:  # stored when the field had another type
+        return None
+
+
+def _kinds(
+    spec: SourceSpec, known: KnownRecords, baseline: RunSummary | None, keys: Iterable[str]
+) -> dict[tuple[str, AnchorValue], list[str]]:
+    """The kinds of record among `keys` (the last good run's): for each field that took
+    only a few values in the last good run (a status, a category), the records of
+    each of its values, empty included. (field, value) -> their keys, in that order."""
+    stats = baseline.fields if baseline is not None else {}
+    few = [n for n in spec.fields if n in stats and stats[n].known_values is not None]
+    kinds: dict[tuple[str, AnchorValue], list[str]] = {}
+    for key in keys:
+        values = known[key]
+        for name in few:
+            if name in values:
+                kinds.setdefault((name, values[name]), []).append(key)
+    return kinds
+
+
+def _improbable(count: int, n: int, p: float) -> bool:
+    """Whether `count` or more of `n` records would break a rule less often than
+    CHANCE, if each broke it with probability `p`, the share of all records that do:
+    then what those records have in common breaks it, not chance."""
+    if count <= 0 or p >= 1:
+        return False
+    if p <= 0:
+        return True
+    log_p, log_q, log_n = math.log(p), math.log1p(-p), math.lgamma(n + 1)
+    tail = sum(
+        math.exp(log_n - math.lgamma(k + 1) - math.lgamma(n - k + 1) + k * log_p + (n - k) * log_q)
+        for k in range(count, n + 1)
+    )
+    return tail < CHANCE
 
 
 class _Crawl:
@@ -837,7 +923,9 @@ class _Crawl:
         for page, number in self._walk(first):
             yield from self._records(page, number)
 
-    def sample(self, first: Document, cap: int) -> Iterator[tuple[str, RecordResult]]:
+    def sample(
+        self, first: Document, cap: int, known: KnownRecords, baseline: RunSummary | None
+    ) -> Iterator[tuple[str, RecordResult]]:
         """Every listing page, like a run, then the records of `cap` of their items."""
         pool: dict[str, Document] = {}
         for page, number in self._walk(first):
@@ -846,7 +934,7 @@ class _Crawl:
                     pool.setdefault(key, item)
         if self.unavailable is not None:
             return
-        chosen = _choose(pool, cap)
+        chosen = _choose(self.spec, pool, known, baseline, cap)
         self.run.drawn = len(chosen)
         for key in chosen:
             record = self._record(key, pool[key])
@@ -939,6 +1027,8 @@ class _Comparison:
         self.values = _KnownValues(spec, baseline)
         self.new = 0  # records the last good run didn't have
         self.new_empty: Counter[str] = Counter()  # ... with a required field empty
+        self.compared: list[str] = []  # the keys of the last good run's records read
+        self.differs: dict[str, dict[str, Mismatch]] = {name: {} for name in spec.fields}
         self._seen: set[str] = set()
 
     def add(self, key: str, result: RecordResult) -> None:
@@ -955,9 +1045,13 @@ class _Comparison:
                     self.new_empty[name] += 1
             return
         self.run.compared += 1
+        self.compared.append(key)
         for name, check in self.run.fields.items():
             if name in expected:
-                check.add(result.url, expected[name], encode(result.fields[name].value))
+                want, got = expected[name], encode(result.fields[name].value)
+                check.add(result.url, want, got)
+                if want != got:
+                    self.differs[name][key] = Mismatch(url=result.url, expected=want, got=got)
 
     def problems(
         self, threshold: float, volatile_change: float, out_of: int | None = None
@@ -965,11 +1059,13 @@ class _Comparison:
         """The fields that break the rules. `out_of`: the crawl stopped short, and
         could have compared at most that many records; then only mismatches beyond what
         the rules allow even if every other record matched are problems."""
-        problems = []
+        problems: list[str] = []
+        failing: set[str] = set()
         for name, f in self.run.fields.items():
             if not f.compared:
                 continue
             base = f.compared if out_of is None else max(out_of, f.compared)
+            found = len(problems)
             if not f.volatile:
                 if f.compared - f.matched > (1 - threshold) * base:
                     e = f.mismatches[0]
@@ -977,21 +1073,23 @@ class _Comparison:
                         f"{name} reproduces {f.matched}/{f.compared} values of the last good run "
                         f"(needs {threshold:.0%}); expected {e.expected!r}, got {e.got!r}"
                     )
-                continue
-            if f.emptied > (1 - threshold) * base:
-                e = f.example(emptied=True)
-                problems.append(
-                    f"{name} became empty on {f.emptied} of {f.compared} records that had a "
-                    "value in the last good run (a volatile field may change, but not become "
-                    f"empty); expected {e.expected!r}, got None"
-                )
-            if f.changed > volatile_change * base:
-                e = f.example(emptied=False)
-                problems.append(
-                    f"{name} changed on {f.changed} of {f.compared} records since the last good "
-                    f"run (needs at most {volatile_change:.0%} for a volatile field); "
-                    f"expected {e.expected!r}, got {e.got!r}"
-                )
+            else:
+                if f.emptied > (1 - threshold) * base:
+                    e = f.example(emptied=True)
+                    problems.append(
+                        f"{name} became empty on {f.emptied} of {f.compared} records that had a "
+                        "value in the last good run (a volatile field may change, but not become "
+                        f"empty); expected {e.expected!r}, got None"
+                    )
+                if f.changed > volatile_change * base:
+                    e = f.example(emptied=False)
+                    problems.append(
+                        f"{name} changed on {f.changed} of {f.compared} records since the last "
+                        f"good run (needs at most {volatile_change:.0%} for a volatile field); "
+                        f"expected {e.expected!r}, got {e.got!r}"
+                    )
+            if len(problems) > found:
+                failing.add(name)
         for name, empty in self.new_empty.items():
             problems.append(
                 f"required field {name} is empty on {empty} of {self.new} records "
@@ -999,4 +1097,36 @@ class _Comparison:
             )
         if out_of is not None:
             return problems  # a share of values not yet read could still go either way
+        problems += self._extreme_problems(failing, threshold, volatile_change)
         return problems + self.values.problems("records of the shadow run")
+
+    def _extreme_problems(
+        self, failing: set[str], threshold: float, volatile_change: float
+    ) -> list[str]:
+        """Number fields that pass the rules over all records, but not on their
+        EXTREMES largest or smallest values, where chance can't explain the difference:
+        prices that change don't pick the largest, but a pattern too narrow for them
+        misreads every one."""
+        problems = []
+        for (name, end), members in _extremes(self.spec, self.known, self.compared).items():
+            f = self.run.fields[name]
+            if name in failing or not f.compared:
+                continue
+            differs = self.differs[name]
+            wrong = [key for key in members if key in differs]
+            allowed = volatile_change if f.volatile else 1 - threshold
+            overall = f.compared - f.matched
+            if len(wrong) <= allowed * len(members):
+                continue
+            if not _improbable(len(wrong), len(members), overall / f.compared):
+                continue
+            e = differs[wrong[0]]
+            verb = "changed" if f.volatile else "reads another value"
+            size = "large" if end == "largest" else "small"
+            problems.append(
+                f"{name} {verb} on {len(wrong)} of the {len(members)} records where it was "
+                f"{end} in the last good run, against {overall - len(wrong)} of the other "
+                f"{f.compared - len(members)}: a strategy may misread {size} numbers; "
+                f"expected {e.expected!r}, got {e.got!r}"
+            )
+        return problems

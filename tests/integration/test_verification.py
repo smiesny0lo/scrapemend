@@ -461,6 +461,34 @@ def test_a_sampled_shadow_run_follows_the_next_page_link_to_its_end(big: Broken)
     assert (shadow.drawn, shadow.compared) == (500, 500)
 
 
+B1 = (  # value wrong on the 5 largest amounts of 200: within the 10% it may change by
+    "value changed on 5 of the 10 records where it was largest in the last good run, "
+    "against 0 of the other 190: a strategy may misread large numbers"
+)
+
+
+def test_a_number_field_wrong_only_on_its_largest_values_is_rejected(broken: Broken) -> None:
+    # Review attacks B1 (v2) and B7 (v3): every amount from EUR 2M up loses its
+    # millions. They passed the shadow run, which compared all 200 records: 5 changed
+    # values are within what a volatile field may change by. They are the five largest.
+    report = broken.check(load_patch(BAD / f"v{layout(broken)}-value-misreads-over-2m.yaml"))
+    assert report.shadow is not None and report.shadow.fields["value"].changed == 5
+    [problem] = report.problems
+    assert problem.startswith(B1), problem
+    largest = max(n.value for n in NOTICES.values() if n.value is not None)
+    assert f"expected '{largest.normalize():f}'" in problem  # the largest amount, misread
+
+
+def test_a_sample_reads_the_largest_and_smallest_values_of_every_number_field(
+    big: Broken,
+) -> None:
+    # B1 on 1200 notices: about 30 amounts from EUR 2M up, of which a random sample of
+    # 500 reads a dozen. It reads the 10 largest and 10 smallest amounts too, always.
+    report = big.check(load_patch(BAD / "v2-value-misreads-over-2m.yaml"))
+    [problem] = report.problems
+    assert problem.startswith("value changed on 10 of the 10 records where it was largest"), problem
+
+
 def test_unloadable_anchor_pages_are_tolerated(broken: Broken) -> None:
     # A notice taken down since the good run: its page is gone, not wrong.
     gone = broken.anchors[0].model_copy(update={"url": f"{broken.spec.fetch.start}/TN-0000-0000"})
