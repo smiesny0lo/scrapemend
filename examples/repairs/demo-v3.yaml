@@ -1,5 +1,5 @@
 # A hand-written repair of examples/sources/demo.yaml for demo layout v3.
-# Use it without an LLM:  scrapemend heal examples/sources/demo.yaml --patch examples/repairs/demo-v3.yaml
+# Use it without an LLM:  specmend heal examples/sources/demo.yaml --patch examples/repairs/demo-v3.yaml
 rationale: >
   Layout v3 is a redesign: a card grid instead of a table, utility classes that say
   nothing about content, and several fields merged into lines of text. Selectors

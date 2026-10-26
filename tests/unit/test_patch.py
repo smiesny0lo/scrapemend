@@ -4,9 +4,9 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from scrapemend.heal.context import RepairContext
-from scrapemend.heal.providers.anthropic import AnthropicProvider
-from scrapemend.spec import (
+from specmend.heal.context import RepairContext
+from specmend.heal.providers.anthropic import AnthropicProvider
+from specmend.spec import (
     CssSpec,
     CustomSpec,
     LabelSpec,
@@ -17,7 +17,7 @@ from scrapemend.spec import (
     load_spec,
     parse_patch,
 )
-from scrapemend.spec.patch import SpecPatch
+from specmend.spec.patch import SpecPatch
 from tests.support import RecordedClaude, recorded
 
 ROOT = Path(__file__).parents[2]

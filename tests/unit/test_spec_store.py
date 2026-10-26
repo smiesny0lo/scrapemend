@@ -3,9 +3,9 @@ from typing import Any
 
 import pytest
 
-from scrapemend.spec import SourceSpec, load_spec
-from scrapemend.spec.store import SpecConflict, SpecStore
-from scrapemend.state import connect
+from specmend.spec import SourceSpec, load_spec
+from specmend.spec.store import SpecConflict, SpecStore
+from specmend.state import connect
 
 DEMO = load_spec(Path(__file__).parents[2] / "examples" / "sources" / "demo.yaml")
 

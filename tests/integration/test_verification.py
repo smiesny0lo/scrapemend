@@ -19,17 +19,17 @@ from starlette.types import Receive, Scope, Send
 
 from examples.mutating_site.app import create_app
 from examples.mutating_site.records import Notice, generate_notices
-from scrapemend.extract import Extractor
-from scrapemend.fetch import HttpFetcher
-from scrapemend.heal.anchors import Anchor, AnchorValue, split
-from scrapemend.heal.pages import PageSource
-from scrapemend.heal.verify import VerificationReport, verify
-from scrapemend.pipeline import RunSummary, ValidatedRecord
-from scrapemend.runner import run_source
-from scrapemend.snapshots import FilesystemSnapshotStore
-from scrapemend.spec import CssSpec, SourceSpec, XPathSpec, load_patch, load_spec
-from scrapemend.spec.patch import FieldPatch, SpecPatch
-from scrapemend.state import State
+from specmend.extract import Extractor
+from specmend.fetch import HttpFetcher
+from specmend.heal.anchors import Anchor, AnchorValue, split
+from specmend.heal.pages import PageSource
+from specmend.heal.verify import VerificationReport, verify
+from specmend.pipeline import RunSummary, ValidatedRecord
+from specmend.runner import run_source
+from specmend.snapshots import FilesystemSnapshotStore
+from specmend.spec import CssSpec, SourceSpec, XPathSpec, load_patch, load_spec
+from specmend.spec.patch import FieldPatch, SpecPatch
+from specmend.state import State
 from tests.support import FakeClock, serve
 
 pytestmark = pytest.mark.integration

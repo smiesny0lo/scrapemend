@@ -1,5 +1,5 @@
 # A hand-written repair of examples/sources/demo-listing.yaml for demo layout v3.
-# scrapemend heal examples/sources/demo-listing.yaml --patch examples/repairs/demo-listing-v3.yaml
+# specmend heal examples/sources/demo-listing.yaml --patch examples/repairs/demo-listing-v3.yaml
 rationale: >
   Layout v3 turned the table into a grid of cards with utility classes. Each card
   has the authority on top, the title link in its h3, a "Deadline: ..." line and

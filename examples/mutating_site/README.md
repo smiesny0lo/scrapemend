@@ -1,6 +1,6 @@
 # Mutating demo site
 
-A small fake procurement portal for testing scrapemend. It serves 200 synthetic tender notices and can switch between three page layouts while it is running. Every layout shows **the same records at the same URLs**. Only the HTML changes, the way a real site changes when it is redesigned.
+A small fake procurement portal for testing specmend. It serves 200 synthetic tender notices and can switch between three page layouts while it is running. Every layout shows **the same records at the same URLs**. Only the HTML changes, the way a real site changes when it is redesigned.
 
 ```sh
 pip install -e ".[demo]"

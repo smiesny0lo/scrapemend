@@ -6,15 +6,15 @@ from pydantic import TypeAdapter
 
 from examples.mutating_site.app import create_app
 from examples.mutating_site.records import format_date, format_money, generate_notices
-from scrapemend.extract.document import Document
-from scrapemend.extract.strategies import (
+from specmend.extract.document import Document
+from specmend.extract.strategies import (
     CssStrategy,
     LabelStrategy,
     RegexStrategy,
     XPathStrategy,
     build,
 )
-from scrapemend.spec import CssSpec, StrategySpec, XPathSpec
+from specmend.spec import CssSpec, StrategySpec, XPathSpec
 
 STRATEGY = TypeAdapter[StrategySpec](StrategySpec)
 

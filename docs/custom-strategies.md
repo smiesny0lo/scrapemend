@@ -1,11 +1,11 @@
 # Custom strategies
 
-The built-in strategies (css, xpath, label, regex) cover most HTML. For anything else, a plugin can add a strategy without forking scrapemend. Examples are values hidden in JSON-LD, a PDF linked from the page, or a site-specific encoding.
+The built-in strategies (css, xpath, label, regex) cover most HTML. For anything else, a plugin can add a strategy without forking specmend. Examples are values hidden in JSON-LD, a PDF linked from the page, or a site-specific encoding.
 
 ## A strategy is one method
 
 ```python
-from scrapemend.extract import Document
+from specmend.extract import Document
 
 
 class MyStrategy:
@@ -23,7 +23,7 @@ class MyStrategy:
 - `doc.url`: the page's URL;
 - `doc.text`: its visible text, whitespace collapsed.
 
-Return text, not typed values. scrapemend applies the field's normalizers and type conversion, exactly as for built-in strategies. A strategy whose text doesn't convert loses to the next one.
+Return text, not typed values. specmend applies the field's normalizers and type conversion, exactly as for built-in strategies. A strategy whose text doesn't convert loses to the next one.
 
 ## Using it in a spec
 
@@ -42,19 +42,19 @@ price:
 Use an entry point in your plugin package's `pyproject.toml`. The factory receives the `options` and returns a strategy; a class works:
 
 ```toml
-[project.entry-points."scrapemend.strategies"]
+[project.entry-points."specmend.strategies"]
 jsonld = "my_package.strategies:JsonLdStrategy"
 ```
 
 Or register it in code, before the spec runs:
 
 ```python
-from scrapemend.extract.strategies import register_strategy
+from specmend.extract.strategies import register_strategy
 
 register_strategy("jsonld", JsonLdStrategy)
 ```
 
-`scrapemend validate` and every run check that each custom strategy a spec names is installed, and stop before any request if one isn't:
+`specmend validate` and every run check that each custom strategy a spec names is installed, and stop before any request if one isn't:
 
 ```
 no installed plugin provides the custom strategy 'jsonld'
@@ -75,6 +75,6 @@ It picks a value by its path (`offers.price`), optionally only from objects of o
 ## Keep in mind
 
 - Repair providers can't propose custom strategies: the anthropic provider's answer schema only includes the built-in ones. A repair keeps yours in place and adds its strategies around them: a custom strategy listed before every built-in one stays first, any other comes after the repair's strategies. The verification gate runs custom strategies like any other.
-- A strategy that gives up on a page because it takes too long may raise `scrapemend.extract.strategies.StrategyTimeout`: the field's next strategy gets its turn, and a repair whose strategy times out during verification is rejected.
+- A strategy that gives up on a page because it takes too long may raise `specmend.extract.strategies.StrategyTimeout`: the field's next strategy gets its turn, and a repair whose strategy times out during verification is rejected.
 - The gate checks that no two fields read the same element where their values differ. It can only do that for a custom strategy that also has a `locate(doc)` method, returning the element it read the value from (or `None`).
 - Strategies must not fetch anything themselves. All requests go through the fetcher, which applies robots.txt and rate limits. If you need another document (a linked PDF, an API response), that's a fetcher or pipeline extension, not a strategy.

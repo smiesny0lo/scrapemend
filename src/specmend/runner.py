@@ -1,0 +1,305 @@
+"""One judged run of a source: crawl, validate, compare with the last good run,
+classify, record, prune old snapshots, notify."""
+
+import logging
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
+
+from specmend.detect.classify import Diagnosis, Evidence, classify, diagnose, worst
+from specmend.detect.fingerprint import similarity
+from specmend.events import Event, EventKind, Notifier
+from specmend.extract import FieldResult
+from specmend.extract.select import find_link
+from specmend.fetch import Fetcher, FetchError, Requests
+from specmend.heal.anchors import Anchor, AnchorPicker, encode
+from specmend.pipeline import RunAborted, RunSummary, SourceRun, ValidatedRecord
+from specmend.retention import prune
+from specmend.runs import RunMode, RunReport, RunStore
+from specmend.snapshots import SnapshotStore
+from specmend.spec import SourceSpec
+from specmend.state import State
+from specmend.validate import validate_batch
+
+PROBE_PAGES = 3  # known detail pages re-checked when the listing yields nothing
+
+FieldValues = dict[str, tuple[object, int | None]]  # field -> (value, winning strategy)
+
+
+def run_source(
+    spec: SourceSpec,
+    fetcher: Fetcher,
+    snapshots: SnapshotStore,
+    state: State,
+    *,
+    mode: RunMode = "run",
+    limit: int | None = None,
+    keep_invalid: bool = False,
+    on_record: Callable[[ValidatedRecord], None] | None = None,
+    notifier: Notifier | None = None,
+) -> RunReport:
+    """Crawl a source and judge the result.
+
+    Valid records are passed to `on_record` as they arrive (invalid ones too with
+    `keep_invalid`). Only a complete ok run of mode "run" becomes the new baseline
+    and refreshes the source's anchors and known records. A drift run doesn't: the
+    runs after it are compared with the same last good run, and keep drifting, until
+    a human accepts its drift (accept_drift), for which its anchors are held. Nor
+    does an ok run of a provisional version, one heal promoted automatically: its
+    anchors are held until a human confirms the version (confirm), and every such
+    run warns.
+    Then the snapshots of older runs no one needs are deleted (specmend.retention).
+    """
+    runs = state.runs
+    started = datetime.now(UTC)
+    sent = Requests.of(fetcher)
+    previous = runs.latest(spec.id)
+    baseline_report = runs.last_good(spec.id)
+    baseline = baseline_report.summary if baseline_report else None
+    provisional = state.specs.is_provisional(spec.id, spec.version)
+
+    crawl = SourceRun(spec, fetcher, snapshots, limit=limit)
+    picker = AnchorPicker(spec.heal.anchors, spec.item.key, crawl.summary.run_id)
+    error: BaseException | None = None
+    try:
+        for record in crawl.records():
+            picker.add(record)
+            if on_record is not None and (record.valid or keep_invalid):
+                on_record(record)
+    except (FetchError, RunAborted) as e:
+        error = e
+    summary = crawl.summary
+    complete = error is None and limit is None and mode == "run"
+
+    diagnosis = None
+    next_link_missing = False
+    listing_text = None
+    if error is None and crawl.first_listing is not None:
+        listing_text = crawl.first_listing.text
+        paginate = spec.fetch.paginate
+        stopped_early = summary.listing_pages == 1 and (limit is None or summary.items < limit)
+        if paginate and baseline and baseline.listing_pages > 1 and stopped_early:
+            next_link_missing = find_link(paginate.next, crawl.first_listing) is None
+        # Detail pages known from a good run show which fields broke. Without detail
+        # pages there is nothing to probe: the item container is what broke.
+        if summary.items == 0 and spec.item.follow is not None:
+            known = state.anchors.all(spec.id)
+            if known:
+                diagnosis = _diagnose_anchors(crawl, known)
+            elif baseline_report is not None:
+                diagnosis = _diagnose(crawl, snapshots, baseline_report)
+
+    # After the probes, so probed detail pages count as structural evidence too.
+    structure = _structure(runs, spec.id, summary)
+    violations = validate_batch(
+        summary.valid_records, summary.fields, spec.expect, complete=complete
+    )
+    failures, warnings = classify(
+        Evidence(
+            spec=spec,
+            summary=summary,
+            complete=complete,
+            error=error,
+            structure=structure,
+            baseline=baseline,
+            violations=violations,
+            diagnosis=diagnosis,
+            listing_text=listing_text,
+            next_link_missing=next_link_missing,
+        )
+    )
+    if provisional:
+        since = f"run {baseline_report.run_id}" if baseline_report else "the last good run"
+        warnings.append(
+            f"v{spec.version} was promoted automatically and is provisional: its runs don't "
+            f"become the last good run, and runs and repairs are compared with {since}, "
+            f"until you check its data and confirm it: specmend confirm <spec> {spec.version}"
+        )
+    report = RunReport(
+        run_id=summary.run_id,
+        source_id=spec.id,
+        spec_version=spec.version,
+        mode=mode,
+        status=worst(failures),
+        started_at=started,
+        finished_at=datetime.now(UTC),
+        complete=complete,
+        summary=summary,
+        failures=failures,
+        warnings=warnings,
+        structure=structure,
+        diagnosis=diagnosis,
+        error=str(error) if error else None,
+        requests=Requests.since(fetcher, sent),
+        provisional=provisional,
+    )
+    runs.save(report)
+    if complete and report.status == "ok" and not provisional:
+        _set_fingerprints(runs, summary)
+        state.anchors.replace(spec.id, picker.anchors(), picker.records())
+    elif complete and report.status in ("ok", "drift"):
+        state.anchors.hold(spec.id, summary.run_id, picker.anchors(), picker.records())
+    if pruned := _prune(spec, state, snapshots):
+        report = report.model_copy(update={"pruned": pruned})
+        runs.save(report)
+    if notifier is not None:
+        _notify(notifier, report, previous)
+    return report
+
+
+class DriftNotAccepted(ValueError):
+    """A run can't be accepted: it isn't the latest drift run since the last good run."""
+
+
+class ConfirmRefused(ValueError):
+    """A version can't be confirmed: it doesn't exist, heal didn't promote it
+    automatically, or it was confirmed already."""
+
+
+def confirm(state: State, source_id: str, version: int) -> RunReport | None:
+    """Confirm a version that heal promoted automatically, because a human checked its
+    data: its runs become the last good run from now on, like any version's. If its
+    latest complete ok run is held (no drift run came after it), that run becomes the
+    last good run now, with its page fingerprints, anchors and records, and is
+    returned; otherwise its next ok run will be."""
+    stored = state.specs.get(source_id, version)
+    if stored is None:
+        raise ConfirmRefused(f"{source_id} has no version {version}")
+    if not state.specs.promoted_automatically(source_id, version):
+        raise ConfirmRefused(
+            f"{source_id} v{version} was not promoted automatically: there is nothing to confirm"
+        )
+    if not stored.provisional:
+        raise ConfirmRefused(f"{source_id} v{version} is confirmed already")
+    state.specs.confirm(source_id, version)
+    held = state.anchors.held(source_id)
+    report = state.runs.get(held) if held is not None else None
+    if report is None or report.status != "ok" or report.spec_version != version:
+        return None
+    state.anchors.accept(source_id, report.run_id)
+    _set_fingerprints(state.runs, report.summary)
+    return state.runs.accept(report.run_id, datetime.now(UTC))
+
+
+def accept_drift(state: State, run_id: str) -> RunReport:
+    """Make a drift run the baseline, because a human checked that its data is right:
+    the runs after it, and repairs, are compared with it. Its anchors and records
+    must still be held, which they are for the latest drift run since the last good
+    run. The run keeps its status; it is marked accepted. If its version was
+    promoted automatically, accepting its data confirms that version too."""
+    report = state.runs.get(run_id)
+    if report is None:
+        raise DriftNotAccepted(f"there is no run {run_id}")
+    if report.status != "drift":
+        raise DriftNotAccepted(
+            f"run {run_id} is {report.status}, not drift: only a drift run can be accepted"
+        )
+    if report.accepted_at is not None:
+        raise DriftNotAccepted(f"run {run_id} was accepted already")
+    good = state.runs.last_good(report.source_id)
+    if good is not None and good.started_at > report.started_at:
+        raise DriftNotAccepted(f"run {run_id} is older than the last good run, {good.run_id}")
+    held = state.anchors.held(report.source_id)
+    if held != run_id:
+        if held is None:
+            raise DriftNotAccepted(f"run {run_id}'s records were not kept, so it can't be accepted")
+        newer = state.runs.get(held)
+        if newer is not None and newer.status == "ok":
+            raise DriftNotAccepted(
+                f"run {held} of provisional v{newer.spec_version} is newer, and its records "
+                f"are kept instead: check its data and confirm v{newer.spec_version}"
+            )
+        raise DriftNotAccepted(
+            f"only the latest drift run's records are kept: review run {held} and accept it"
+        )
+    state.anchors.accept(report.source_id, run_id)
+    _set_fingerprints(state.runs, report.summary)
+    if state.specs.is_provisional(report.source_id, report.spec_version):
+        state.specs.confirm(report.source_id, report.spec_version)
+    return state.runs.accept(run_id, datetime.now(UTC))
+
+
+def _prune(spec: SourceSpec, state: State, snapshots: SnapshotStore) -> list[str]:
+    """The older runs whose snapshots were deleted. A store that fails to delete is
+    logged and skipped: retention must never break a run."""
+    try:
+        return prune(spec, state, snapshots).deleted
+    except Exception:
+        logging.getLogger("specmend").exception("pruning the snapshots of %s failed", spec.id)
+        return []
+
+
+def _set_fingerprints(runs: RunStore, summary: RunSummary) -> None:
+    """Make a run's page fingerprints the ones later runs' pages are compared with."""
+    for kind, prints in summary.fingerprints.items():
+        if prints:
+            runs.set_baseline(summary.source_id, kind, prints[0], summary.run_id)
+
+
+def _structure(runs: RunStore, source_id: str, summary: RunSummary) -> dict[str, float]:
+    """Per page kind, the lowest similarity of this run's pages to the baseline."""
+    structure = {}
+    for kind, prints in summary.fingerprints.items():
+        baseline = runs.baseline(source_id, kind)
+        if baseline and prints:
+            structure[kind] = min(similarity(fp, baseline) for fp in prints)
+    return structure
+
+
+def _diagnose(crawl: SourceRun, snapshots: SnapshotStore, baseline: RunReport) -> Diagnosis | None:
+    """Re-check detail pages from the last good run: what did the spec read there
+    then (from the stored snapshot), and what does it read now (fetched fresh)?"""
+    before: dict[str, FieldValues] = {}
+    for snapshot_id in snapshots.snapshots(baseline.source_id, baseline.run_id):
+        snapshot = snapshots.get(snapshot_id)
+        if snapshot.kind != "detail" or snapshot.status != 200:
+            continue
+        before[snapshot.url] = _values(crawl.extractor.extract(snapshot.document()).fields)
+        if len(before) == PROBE_PAGES:
+            break
+    if not before:
+        return None
+    now = {url: _values(record.fields) for url, record in crawl.probe(before)}
+    return diagnose(crawl.spec, before, now)
+
+
+def _diagnose_anchors(crawl: SourceRun, anchors: list[Anchor]) -> Diagnosis | None:
+    """Re-check anchor pages, whose good values are known."""
+    known = [a for a in anchors if a.url][:PROBE_PAGES]
+    before: dict[str, FieldValues] = {
+        str(a.url): {name: (a.values[name], a.strategies.get(name)) for name in a.values}
+        for a in known
+    }
+    if not before:
+        return None
+    now = {url: _values(record.fields) for url, record in crawl.probe(before)}
+    return diagnose(crawl.spec, before, now)
+
+
+def _values(fields: Mapping[str, FieldResult]) -> FieldValues:
+    # Encoded like anchor values, so values from either source compare equal.
+    return {name: (encode(f.value), f.strategy) for name, f in fields.items()}
+
+
+def _notify(notifier: Notifier, report: RunReport, previous: RunReport | None) -> None:
+    def send(kind: EventKind, message: str) -> None:
+        notifier.notify(
+            Event(
+                kind=kind,
+                source_id=report.source_id,
+                message=message,
+                run_id=report.run_id,
+                status=report.status,
+            )
+        )
+
+    if report.status == "drift":
+        for failure in report.failures:
+            send("drift", failure.message)
+    elif not report.good:
+        first = report.failures[0]
+        fields = f" (failing: {', '.join(first.fields)})" if first.fields else ""
+        send("run_failed", f"{first.category}: {first.message}{fields}")
+    elif previous is not None and not previous.good:
+        send("run_recovered", f"good again after {previous.status} in run {previous.run_id}")
+    for warning in report.warnings:
+        send("warning", warning)

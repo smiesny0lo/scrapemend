@@ -24,25 +24,25 @@ from examples.mutating_site import app as demo_site
 from examples.mutating_site.app import create_app
 from examples.mutating_site.chaos import Chaos, parse_modes
 from examples.mutating_site.records import generate_notices
-from scrapemend.cli import app as cli
-from scrapemend.events import Event
-from scrapemend.fetch import HttpFetcher, Requests, Response, TransientError
-from scrapemend.heal import ladder
-from scrapemend.heal import verify as verification
-from scrapemend.heal.context import RepairContext
-from scrapemend.heal.ladder import PromotionRefused, heal, promote, rollback, run_and_heal
-from scrapemend.heal.pages import PageSource
-from scrapemend.heal.proposals import Proposal
-from scrapemend.heal.providers import NoneProvider, PatchProvider
-from scrapemend.heal.providers.anthropic import AnthropicProvider
-from scrapemend.heal.verify import Check, VerificationReport
-from scrapemend.runner import run_source
-from scrapemend.runs import RunReport
-from scrapemend.snapshots import FilesystemSnapshotStore
-from scrapemend.spec import RegexSpec, SourceSpec, load_patch, load_spec
-from scrapemend.spec.patch import FieldPatch, SpecPatch
-from scrapemend.spec.store import SpecVersion
-from scrapemend.state import State
+from specmend.cli import app as cli
+from specmend.events import Event
+from specmend.fetch import HttpFetcher, Requests, Response, TransientError
+from specmend.heal import ladder
+from specmend.heal import verify as verification
+from specmend.heal.context import RepairContext
+from specmend.heal.ladder import PromotionRefused, heal, promote, rollback, run_and_heal
+from specmend.heal.pages import PageSource
+from specmend.heal.proposals import Proposal
+from specmend.heal.providers import NoneProvider, PatchProvider
+from specmend.heal.providers.anthropic import AnthropicProvider
+from specmend.heal.verify import Check, VerificationReport
+from specmend.runner import run_source
+from specmend.runs import RunReport
+from specmend.snapshots import FilesystemSnapshotStore
+from specmend.spec import RegexSpec, SourceSpec, load_patch, load_spec
+from specmend.spec.patch import FieldPatch, SpecPatch
+from specmend.spec.store import SpecVersion
+from specmend.state import State
 from tests.support import FakeClock, RecordedClaude, serve
 
 pytestmark = pytest.mark.integration
@@ -225,8 +225,8 @@ def test_recorded_claude_answers_heal_the_redesign(world: World, layout: int) ->
 
 
 @pytest.mark.skipif(
-    os.environ.get("SCRAPEMEND_LIVE_ANTHROPIC") != "1",
-    reason="calls the Anthropic API: set SCRAPEMEND_LIVE_ANTHROPIC=1 and ANTHROPIC_API_KEY",
+    os.environ.get("SPECMEND_LIVE_ANTHROPIC") != "1",
+    reason="calls the Anthropic API: set SPECMEND_LIVE_ANTHROPIC=1 and ANTHROPIC_API_KEY",
 )
 @pytest.mark.parametrize("layout", [2, 3])
 def test_live_claude_heals_the_redesign(world: World, layout: int) -> None:
@@ -248,7 +248,7 @@ def test_auto_mode_verifies_again_exactly_like_promote(
 ) -> None:
     # Auto mode used to verify a repair again on the PageSource `heal` built, whose
     # list of detail pages was fixed when it was made, so it saw 3 known records where
-    # `scrapemend promote` saw 20. The same proposal, promoted both ways, must get the
+    # `specmend promote` saw 20. The same proposal, promoted both ways, must get the
     # same report.
     world.layout(2)
     world.run()
@@ -383,24 +383,24 @@ def test_one_spec_heals_through_both_redesigns(world: World) -> None:
 @pytest.mark.parametrize(
     ("fixture", "problem"),
     [
-        (  # A3: 102 of 200 values wrong, 6 of them on anchors
+        (  # A3: 102 of 200 values wrong, 8 of them on anchors
             "v2-value-fitted-to-one-page.yaml",
-            "value reproduces 4/10 anchor values (needs 60% for a volatile field); "
-            "expected '236700', got '36700'",
+            "value reproduces 2/10 anchor values (needs 60% for a volatile field); "
+            "expected '182400', got '82400'",
         ),
-        (  # S1: 29 of 200 wrong, none of them an anchor
+        (  # S1: 29 of 200 wrong, 3 of them anchors: 70% of the anchors still match
             "v2-value-drops-millions.yaml",
             "value changed on 29 of 200 records since the last good run (needs at most 10% "
             "for a volatile field); expected '1136600', got '136600'",
         ),
-        (  # S2: 39 of 200 empty, 4 of them anchors: 60% of the anchors still match
+        (  # S2: 39 of 200 empty, 3 of them anchors: 70% of the anchors still match
             "v2-status-enumerates-examples.yaml",
             "status became empty on 39 of 200 records that had a value in the last good run "
             "(a volatile field may change, but not become empty); expected 'Awarded', got None",
         ),
-        (  # S3b: 12 of 200 wrong, 1 of them an anchor
+        (  # S3b: 12 of 200 wrong, none of them an anchor
             "v2-location-last-word.yaml",
-            "location reproduces 9/10 anchor values (needs 100%); "
+            "location reproduces 188/200 values of the last good run (needs 100%); "
             "expected 'Fenwick Vale', got 'Vale'",
         ),
     ],
@@ -555,7 +555,7 @@ def test_drift_alerts_on_every_run_until_a_human_accepts_it(world: World, tmp_pa
     # A bad repair forced past the gate. A drift run used to become the baseline, so
     # only the first run after it alerted: the next one compared the wrong values
     # with the wrong values and said ok. Now every run is compared with the last ok
-    # run, and drifts, until `scrapemend accept-drift` makes a drift run the baseline.
+    # run, and drifts, until `specmend accept-drift` makes a drift run the baseline.
     good = world.state.runs.last_good("tenders-demo")
     assert good is not None
     world.layout(2)
@@ -572,7 +572,7 @@ def test_drift_alerts_on_every_run_until_a_human_accepts_it(world: World, tmp_pa
     assert latest is not None
     drifted.append(latest)
     assert [r.status for r in drifted] == ["drift", "drift", "drift"]
-    assert f"scrapemend accept-drift {latest.run_id}" in by_cli.output
+    assert f"specmend accept-drift {latest.run_id}" in by_cli.output
     alerts = [[e.message for e in world.events.events if e.run_id == r.run_id] for r in drifted[:2]]
     assert alerts[0] and alerts[0] == alerts[1]  # the same alert on every run
     assert set(world.events.kinds) == {"drift"}
@@ -673,7 +673,7 @@ def test_auto_mode_promotes_a_provisional_version_until_a_human_confirms_it(
         notifier=world.events, rebase=world.rebase,
     )  # fmt: skip
     assert outcome is not None and outcome.status == "promoted" and outcome.version == 3
-    assert "scrapemend confirm <spec> 3" in outcome.message
+    assert "specmend confirm <spec> 3" in outcome.message
     assert world.state.specs.is_provisional("tenders-demo", 3)
     assert second is not None and (second.status, second.provisional) == ("ok", True)
     last = world.state.runs.last_good("tenders-demo")
@@ -720,7 +720,7 @@ def test_a_catastrophic_regex_cannot_hang_heal(world: World) -> None:
     command = [
         sys.executable,
         "-m",
-        "scrapemend",
+        "specmend",
         "heal",
         str(DEMO_SPEC),
         "--patch",

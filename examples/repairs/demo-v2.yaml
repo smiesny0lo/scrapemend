@@ -1,5 +1,5 @@
 # A hand-written repair of examples/sources/demo.yaml for demo layout v2.
-# Use it without an LLM:  scrapemend heal examples/sources/demo.yaml --patch examples/repairs/demo-v2.yaml
+# Use it without an LLM:  specmend heal examples/sources/demo.yaml --patch examples/repairs/demo-v2.yaml
 rationale: >
   Layout v2 renamed every class (tr.notice -> tr.tender-row, dd.deadline ->
   dd.tender__closing, ...) and replaced the pager list with rel=next links. The page

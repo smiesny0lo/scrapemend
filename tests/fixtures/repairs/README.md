@@ -12,9 +12,9 @@ Hand-written repairs of `examples/sources/demo.yaml` that the verification gate 
 - `v2-header-row.yaml`: an item container that also matches the table's header row.
 - `listing-v2-title-reads-authority.yaml`: a wrong field in a listing-only spec.
 
-From the publish review of v0.1, the correct repair with one defect each. Most are
-right on the records a provider is shown and wrong on a few others, which the anchors
-used to miss:
+From the publish review of v0.1, the correct repair with one defect each. Most were
+right on the records a provider was shown in that review and wrong on a few others,
+which the anchors used to miss:
 
 | Fixture | Review | Defect |
 |---|---|---|

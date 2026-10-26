@@ -2,8 +2,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from examples.mutating_site.app import create_app
-from scrapemend.detect.fingerprint import CHANGED_BELOW, features, fingerprint, similarity
-from scrapemend.extract import Document
+from specmend.detect.fingerprint import CHANGED_BELOW, features, fingerprint, similarity
+from specmend.extract import Document
 
 
 def fp(html: str) -> str:

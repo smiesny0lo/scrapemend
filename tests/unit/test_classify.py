@@ -3,12 +3,12 @@ from typing import Any
 
 import pytest
 
-from scrapemend.detect.classify import Diagnosis, Evidence, Failure, classify, diagnose, worst
-from scrapemend.extract import FieldResult
-from scrapemend.fetch import BlockedError, RobotsDisallowed, TransientError
-from scrapemend.pipeline import FieldStats, ItemFailure, RunAborted, RunSummary
-from scrapemend.spec import SourceSpec
-from scrapemend.validate import Violation
+from specmend.detect.classify import Diagnosis, Evidence, Failure, classify, diagnose, worst
+from specmend.extract import FieldResult
+from specmend.fetch import BlockedError, RobotsDisallowed, TransientError
+from specmend.pipeline import FieldStats, ItemFailure, RunAborted, RunSummary
+from specmend.spec import SourceSpec
+from specmend.validate import Violation
 
 SPEC = SourceSpec.model_validate(
     {

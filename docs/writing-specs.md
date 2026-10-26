@@ -1,11 +1,11 @@
 # Writing specs
 
-A **source spec** is a YAML file that tells scrapemend how to scrape one website. It is configuration, not code: when the site changes, a repair edits the spec, never Python.
+A **source spec** is a YAML file that tells specmend how to scrape one website. It is configuration, not code: when the site changes, a repair edits the spec, never Python.
 
 `examples/sources/demo.yaml` is a complete, commented spec for the demo site. Check any spec with:
 
 ```sh
-scrapemend validate my-source.yaml
+specmend validate my-source.yaml
 ```
 
 Every problem is reported with its line and column, for example `line 14, col 9: fields.title.stratgies: unknown key`.
@@ -145,15 +145,15 @@ Details:
 `heal.mode` decides what happens when a run fails with a layout problem:
 
 - **`off`:** report only.
-- **`propose`** (the default): a repair that passes verification waits for `scrapemend promote`.
+- **`propose`** (the default): a repair that passes verification waits for `specmend promote`.
 - **`auto`:** a repair is promoted at once, provided three things hold:
   - it passed every check of the verification (one that couldn't run is never promoted automatically);
   - the failure carries structural evidence (the page fingerprint changed);
   - the repair's confidence is at least 0.5.
 
-  The version it becomes is provisional until you confirm it (`scrapemend confirm`): its runs don't become the last good run before that. See [provisional versions](running.md#provisional-versions).
+  The version it becomes is provisional until you confirm it (`specmend confirm`): its runs don't become the last good run before that. See [provisional versions](running.md#provisional-versions).
 
-**Choosing `auto`.** Auto mode trades a human's look for time. A site that changes its layout at night is scraped with a repaired spec before anyone is awake, and the run after the promotion says `ok`. The price is that whatever the gate can't catch reaches your output with no one looking: a field wrong only on records the last good run didn't have, a volatile value wrong on a few records within its allowance, a field wrong on a few records a sample didn't read (see [what it can't catch](verification.md#what-it-cant-catch)). Each of those passed the gate in a review, and the run after it said `ok`. The report that says what the gate let through goes with the `repair_promoted` alert and stays in `scrapemend proposals`, but nobody reads it before the data flows. The provisional version keeps such an error from becoming what the next repair is compared with, not out of the records you already wrote. The confidence of at least 0.5 is the provider's own claim, so it filters nothing a wrong provider is sure of.
+**Choosing `auto`.** Auto mode trades a human's look for time. A site that changes its layout at night is scraped with a repaired spec before anyone is awake, and the run after the promotion says `ok`. The price is that whatever the gate can't catch reaches your output with no one looking: a field wrong only on records the last good run didn't have, a volatile value wrong on a few records within its allowance, a field wrong on a few records a sample didn't read (see [what it can't catch](verification.md#what-it-cant-catch)). Each of those passed the gate in a review, and the run after it said `ok`. The report that says what the gate let through goes with the `repair_promoted` alert and stays in `specmend proposals`, but nobody reads it before the data flows. The provisional version keeps such an error from becoming what the next repair is compared with, not out of the records you already wrote. The confidence of at least 0.5 is the provider's own claim, so it filters nothing a wrong provider is sure of.
 
 Use `auto` where stale data costs more than a few wrong records, and read its alerts. Keep `propose`, the default, where a wrong record costs more than a late one. A spec that doesn't set `heal.mode` never promotes a repair by itself.
 
@@ -173,20 +173,20 @@ A repair can't change any of these settings. [Verification](verification.md) exp
 Every page a run downloads is stored as a snapshot, under `--snapshots`. **`snapshots.keep_runs`** (default 10, at least 1) is how many runs' snapshots a source keeps, newest first. After every run, the snapshots of older runs are deleted, except those still needed:
 
 - the last good run's, which runs and repairs are compared with;
-- a drift run's that `scrapemend accept-drift` could still make the last good run;
+- a drift run's that `specmend accept-drift` could still make the last good run;
 - the failed run's of a proposal that can still be promoted (accepted or unverified): `promote` verifies it again on those pages;
 - the last failed run's, which `heal` repairs by default.
 
-`scrapemend prune SPEC` does the same at any time, and `--dry-run` only lists what would go. See [running](running.md#snapshots).
+`specmend prune SPEC` does the same at any time, and `--dry-run` only lists what would go. See [running](running.md#snapshots).
 
 ## Versions
 
-Specs are versioned and never edited in place. The first run of a spec file registers its `version`. A promoted repair becomes the next version, and `scrapemend rollback` makes an older version active again.
+Specs are versioned and never edited in place. The first run of a spec file registers its `version`. A promoted repair becomes the next version, and `specmend rollback` makes an older version active again.
 
 If you edit a spec file, **bump its `version`**. A changed file reusing a stored version number is refused, so a version number always means one exact spec. A newer file version becomes active. An older one doesn't undo a promoted repair.
 
 ```sh
-scrapemend versions my-source.yaml      # * marks the active version
-scrapemend show my-source.yaml --version 2
-scrapemend diff my-source.yaml --from 1 --to 2
+specmend versions my-source.yaml      # * marks the active version
+specmend show my-source.yaml --version 2
+specmend diff my-source.yaml --from 1 --to 2
 ```

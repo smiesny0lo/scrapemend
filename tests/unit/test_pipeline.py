@@ -3,12 +3,12 @@ from typing import Any
 
 import pytest
 
-from scrapemend.extract import Document
-from scrapemend.extract.select import find_link, select_all
-from scrapemend.fetch import BlockedError, FetchError, Response, TransientError
-from scrapemend.pipeline import MAX_CONSECUTIVE_FAILURES, FieldStats, RunAborted, SourceRun
-from scrapemend.snapshots import FilesystemSnapshotStore
-from scrapemend.spec import CssSpec, SourceSpec, XPathSpec
+from specmend.extract import Document
+from specmend.extract.select import find_link, select_all
+from specmend.fetch import BlockedError, FetchError, Response, TransientError
+from specmend.pipeline import MAX_CONSECUTIVE_FAILURES, FieldStats, RunAborted, SourceRun
+from specmend.snapshots import FilesystemSnapshotStore
+from specmend.spec import CssSpec, SourceSpec, XPathSpec
 
 BASE = "https://example.org"
 

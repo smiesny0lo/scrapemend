@@ -4,7 +4,7 @@ from typing import Any, get_args
 
 import pytest
 
-from scrapemend.extract.normalize import (
+from specmend.extract.normalize import (
     NORMALIZERS,
     convert,
     parse_date,
@@ -13,8 +13,8 @@ from scrapemend.extract.normalize import (
     parse_url,
     strip_currency,
 )
-from scrapemend.spec import FieldSpec
-from scrapemend.spec.models import Normalizer
+from specmend.spec import FieldSpec
+from specmend.spec.models import Normalizer
 
 
 def field(**kwargs: Any) -> FieldSpec:

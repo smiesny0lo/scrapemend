@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 
 from examples.mutating_site.app import create_app
 from examples.mutating_site.records import Notice, generate_notices
-from scrapemend.extract import Document, Extractor, FieldResult
-from scrapemend.spec import FieldSpec, load_spec
+from specmend.extract import Document, Extractor, FieldResult
+from specmend.spec import FieldSpec, load_spec
 
 DEMO_SPEC = load_spec(Path(__file__).parents[2] / "examples" / "sources" / "demo.yaml")
 NOTICES = generate_notices()

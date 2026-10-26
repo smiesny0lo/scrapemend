@@ -7,12 +7,12 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from scrapemend.extract import Document, Extractor, FieldResult, RecordResult, patterns
-from scrapemend.extract.patterns import RegexTimeout, compile_pattern, problem
-from scrapemend.extract.strategies import RegexStrategy, StrategyTimeout
-from scrapemend.spec import FieldSpec, RegexSpec, SourceSpec, load_spec
-from scrapemend.spec.patch import SpecPatch
-from scrapemend.validate import validate_record
+from specmend.extract import Document, Extractor, FieldResult, RecordResult, patterns
+from specmend.extract.patterns import RegexTimeout, compile_pattern, problem
+from specmend.extract.strategies import RegexStrategy, StrategyTimeout
+from specmend.spec import FieldSpec, RegexSpec, SourceSpec, load_spec
+from specmend.spec.patch import SpecPatch
+from specmend.validate import validate_record
 from tests.unit.test_patch import DEMO
 
 # Catastrophic backtracking: on a line of words that ends in punctuation, Python's re

@@ -16,16 +16,16 @@ from typer.testing import CliRunner
 
 from examples.mutating_site.app import create_app
 from examples.mutating_site.chaos import Chaos, parse_modes
-from scrapemend.cli import app as cli
-from scrapemend.detect.fingerprint import CHANGED_BELOW
-from scrapemend.events import Event
-from scrapemend.fetch import HttpFetcher
-from scrapemend.pipeline import ValidatedRecord
-from scrapemend.runner import run_source
-from scrapemend.runs import RunMode, RunReport, RunStore
-from scrapemend.snapshots import FilesystemSnapshotStore
-from scrapemend.spec import SourceSpec, load_spec
-from scrapemend.state import State
+from specmend.cli import app as cli
+from specmend.detect.fingerprint import CHANGED_BELOW
+from specmend.events import Event
+from specmend.fetch import HttpFetcher
+from specmend.pipeline import ValidatedRecord
+from specmend.runner import run_source
+from specmend.runs import RunMode, RunReport, RunStore
+from specmend.snapshots import FilesystemSnapshotStore
+from specmend.spec import SourceSpec, load_spec
+from specmend.state import State
 from tests.support import FakeClock, serve
 
 pytestmark = pytest.mark.integration

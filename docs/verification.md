@@ -1,12 +1,12 @@
 # Verification, explained
 
-A repair is only as good as the evidence that it works. scrapemend never trusts a repair because it looks right, or because the model that wrote it is confident. Every repair passes through the same **verification gate** before it can become the active spec, whether a human wrote it or an LLM proposed it, and whether it is promoted by hand or automatically.
+A repair is only as good as the evidence that it works. specmend never trusts a repair because it looks right, or because the model that wrote it is confident. Every repair passes through the same **verification gate** before it can become the active spec, whether a human wrote it or an LLM proposed it, and whether it is promoted by hand or automatically.
 
 The primary check is a **shadow run**: the repaired spec crawls the source, and its records are compared, by key, with the last good run's. A few quicker checks come first, so most wrong repairs are turned down without a crawl. Read [what the gate guarantees](#what-the-gate-guarantees) and [what it can't catch](#what-it-cant-catch) before you rely on it.
 
 ## Anchors and known records
 
-After every complete, good run, scrapemend keeps two things:
+After every complete, good run, specmend keeps two things:
 
 - **The values of every valid record**, by key, in a comparable form: decimals normalized (`566600.00` equals `566600.0`), dates as ISO strings. These are what the shadow run is compared with.
 - **`heal.anchors` (default 10) anchors**: records the gate can fetch again quickly. For each, the values of every field, the text each value was read from, which strategy won, and the page it came from.
@@ -25,7 +25,7 @@ Every check ends **passed**, **failed** or **not run**, and the report lists eac
 proposal 2 (patch:v2-status-enumerates-examples.yaml, confidence 0.90): failed
   passed   regexes: 2 regexes: 2 on Python's re (at most 1s a search)
   passed   listing: 20 items on the first listing page, 3 listing pages along the next-page link
-  passed   anchors: 10 of 10 anchor pages compared; weakest field 60%
+  passed   anchors: 10 of 10 anchor pages compared; weakest field 70%
   passed   sample: 10 other pages
   passed   known values: category, location, status on 20 pages
   failed   shadow run: the whole source: 10 listing pages, 200 records; all 200 of the last good run's records compared
@@ -40,7 +40,7 @@ proposal 2 (patch:v2-status-enumerates-examples.yaml, confidence 0.90): failed
   judged on their own: every value of category (7), location (16) and status (3); the records where value was empty; the 10 largest and the 10 smallest values of value
 ```
 
-That repair reads `status` with a regex that only knows the values of the examples a provider is shown, `^(Open|Closed)$`. It is right on six of the ten anchors, which is enough for a volatile field there, and wrong on every Awarded notice: the shadow run sees all 39.
+That repair reads `status` with a regex that only knows two of its three values, `^(Open|Closed)$`, as if fitted to examples that showed no other. It is right on seven of the ten anchors, which is enough for a volatile field there, and wrong on every Awarded notice: the shadow run sees all 39.
 
 After the checks, every report says what was compared, field by field: how many values changed, how many became empty, what the rules allow, and what they tolerated. That holds whether the repair passed, failed or is about to be forced. It is the shadow run's comparison if it compared any records, the anchors' otherwise. Then come the records it found, how many were new since the last good run (only their required fields and small sets of values are checked), and what it judged on its own. A report that passed says what it let through, so whoever promotes the repair can see it:
 
@@ -125,22 +125,22 @@ A shadow run that stops at a page it can't fetch still fails the repair if the r
 heal: quarantined: proposal 1 could not be verified: shadow run: the last good run's records are not stored; review it, then promote it with --force, or run heal again
 ```
 
-`scrapemend promote` verifies it again first. A page that didn't load before is fetched again, so promoting later may pass without anything else. If a check still can't run, only `--force` promotes it, and never past a check that failed. **Automatic promotion never uses `--force`.**
+`specmend promote` verifies it again first. A page that didn't load before is fetched again, so promoting later may pass without anything else. If a check still can't run, only `--force` promotes it, and never past a check that failed. **Automatic promotion never uses `--force`.**
 
 ### Blocked
 
-A site that refuses us is not a page that failed. A 401 or 403, or a page robots.txt disallows, stops `heal` (and `promote`) as **blocked**, wherever it happens: in a quick check or in the shadow run. Nothing is promoted, the source is quarantined, a `heal_blocked` alert goes out, and the command exits with 2. There is no `--force` past it: scrapemend never works around a block.
+A site that refuses us is not a page that failed. A 401 or 403, or a page robots.txt disallows, stops `heal` (and `promote`) as **blocked**, wherever it happens: in a quick check or in the shadow run. Nothing is promoted, the source is quarantined, a `heal_blocked` alert goes out, and the command exits with 2. There is no `--force` past it: specmend never works around a block.
 
 ```
-heal: blocked: the site refused us (HTTP 403: https://example.org/notices?page=2); healing stopped and nothing was promoted. scrapemend never works around a block: find out why before you heal again
+heal: blocked: the site refused us (HTTP 403: https://example.org/notices?page=2); healing stopped and nothing was promoted. specmend never works around a block: find out why before you heal again
 ```
 
 A heal reads about as many pages as a run, so a site that blocks after a number of requests may block the heal when it never blocked a run.
 
 ```
-$ scrapemend promote examples/sources/demo.yaml 1
+$ specmend promote examples/sources/demo.yaml 1
 proposal 1 could not be verified again: shadow run: the last good run's records are not stored; pass --force to promote it anyway (never past a check that failed)
-$ scrapemend promote examples/sources/demo.yaml 1 --force
+$ specmend promote examples/sources/demo.yaml 1 --force
 promote: verified again: not run
   ...
   not run  shadow run: the last good run's records are not stored
@@ -216,7 +216,7 @@ When a repair is accepted with the default settings and a full shadow run (a sou
 
 With a sample (a larger source), the same holds with two differences. Coverage is judged on the items of every listing page. Values are compared on the records drawn, which always include the extremes of each number field and a record of every value of a small set.
 
-The same checks run whether the repair is promoted by `scrapemend promote` or automatically, on the same pages.
+The same checks run whether the repair is promoted by `specmend promote` or automatically, on the same pages.
 
 ## What it can't catch
 
@@ -228,7 +228,7 @@ The same checks run whether the repair is promoted by `scrapemend promote` or au
 - **Changes after the verification.** `promote` verifies again on the pages `heal` stored, not on the site as it is now. A redesign in between isn't seen until the next run.
 - **Pagination past `max_pages`**, and **custom strategies sharing an element**: the shared-element check needs to know which element a strategy read, which a custom strategy only says if it has a `locate(doc)` method.
 
-**After promotion**, the runs that follow are compared with the last good run too: a field whose empty rate moves by more than 5 points, a common value of a small set (5% of records or more) that disappears, or more than 10% of a number field's values changing magnitude make the run `drift`, which alerts. A number field wrong on fewer values than that doesn't drift. A drift run doesn't become the last good run, so every run after it drifts and alerts too, until a human accepts one with `scrapemend accept-drift` (see [drift](running.md#drift)). Neither do the runs of a version promoted automatically, until a human confirms it. Watch the first runs after a promotion anyway.
+**After promotion**, the runs that follow are compared with the last good run too: a field whose empty rate moves by more than 5 points, a common value of a small set (5% of records or more) that disappears, or more than 10% of a number field's values changing magnitude make the run `drift`, which alerts. A number field wrong on fewer values than that doesn't drift. A drift run doesn't become the last good run, so every run after it drifts and alerts too, until a human accepts one with `specmend accept-drift` (see [drift](running.md#drift)). Neither do the runs of a version promoted automatically, until a human confirms it. Watch the first runs after a promotion anyway.
 
 **It can reject a correct repair** when the data really changed: a stable field corrected since the last good run on any record, more than 10% of a volatile field's values changed, more than 10% of the records gone, or a small set of values replaced wholesale (statuses renamed). `--force` can't help there: the check failed. Look at the report, then mark the field `volatile`, or loosen `heal.threshold`, `heal.volatile_change` or `heal.shadow_min_found`, in a new version of the spec file, and run it again. If you have checked the repair yourself, you can also write it into that new version: a spec file you edit is yours, not a repair, and isn't verified.
 
@@ -240,11 +240,11 @@ An accepted repair is stored as a proposal. Under `heal.mode: auto`, it is promo
 - the repair passed every check;
 - the repair's confidence is at least 0.5.
 
-Before it is promoted, it is verified again exactly as `scrapemend promote` would, and it is not promoted if that doesn't pass. The version it becomes is **provisional** until a human confirms it (see [provisional versions](running.md#provisional-versions)): its runs never become the last good run by themselves, so a repair that is wrong in a way the gate can't catch never becomes what the next repair is compared with. A `partial` failure (one field broken on an unchanged page) is never promoted automatically: the site may have legitimately stopped showing that field. `propose` is the default; [choosing `auto`](writing-specs.md#healing-settings) says what auto mode trades away. In `propose` mode, every accepted repair waits for:
+Before it is promoted, it is verified again exactly as `specmend promote` would, and it is not promoted if that doesn't pass. The version it becomes is **provisional** until a human confirms it (see [provisional versions](running.md#provisional-versions)): its runs never become the last good run by themselves, so a repair that is wrong in a way the gate can't catch never becomes what the next repair is compared with. A `partial` failure (one field broken on an unchanged page) is never promoted automatically: the site may have legitimately stopped showing that field. `propose` is the default; [choosing `auto`](writing-specs.md#healing-settings) says what auto mode trades away. In `propose` mode, every accepted repair waits for:
 
 ```sh
-scrapemend diff SPEC ID      # review it
-scrapemend promote SPEC ID   # accept it
+specmend diff SPEC ID      # review it
+specmend promote SPEC ID   # accept it
 ```
 
 `promote` runs the gate again before anything changes, against the current anchors and the failed run's stored pages (pass the same `--snapshots` as the run; they are kept while the proposal can be promoted). The anchors may have been refreshed since, or the proposal accepted by an older version of the gate; one that no longer passes is marked rejected and not promoted (exit code 3). A proposal made for another spec version than the active one is refused; `--force` applies it to the active version instead, and verifies that.

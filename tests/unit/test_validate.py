@@ -4,11 +4,11 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from scrapemend.extract import FieldResult, RecordResult
-from scrapemend.pipeline import FieldStats
-from scrapemend.spec import FieldSpec
-from scrapemend.spec.models import ExpectSpec
-from scrapemend.validate import validate_batch, validate_record
+from specmend.extract import FieldResult, RecordResult
+from specmend.pipeline import FieldStats
+from specmend.spec import FieldSpec
+from specmend.spec.models import ExpectSpec
+from specmend.validate import validate_batch, validate_record
 
 
 def field(**kwargs: Any) -> FieldSpec:

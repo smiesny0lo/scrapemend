@@ -15,18 +15,18 @@ import pytest
 from fastapi import FastAPI
 
 from examples.mutating_site.app import create_app
-from scrapemend.extract import Value
-from scrapemend.fetch import HttpFetcher
-from scrapemend.heal.context import RepairContext
-from scrapemend.heal.ladder import heal, promote
-from scrapemend.heal.pages import PageSource
-from scrapemend.heal.providers import PatchProvider
-from scrapemend.runner import run_source
-from scrapemend.runs import RunReport
-from scrapemend.snapshots import FilesystemSnapshotStore
-from scrapemend.spec import SourceSpec, load_patch, load_spec
-from scrapemend.spec.patch import SpecPatch
-from scrapemend.state import State
+from specmend.extract import Value
+from specmend.fetch import HttpFetcher
+from specmend.heal.context import RepairContext
+from specmend.heal.ladder import heal, promote
+from specmend.heal.pages import PageSource
+from specmend.heal.providers import PatchProvider
+from specmend.runner import run_source
+from specmend.runs import RunReport
+from specmend.snapshots import FilesystemSnapshotStore
+from specmend.spec import SourceSpec, load_patch, load_spec
+from specmend.spec.patch import SpecPatch
+from specmend.state import State
 from tests.support import FakeClock, serve
 
 pytestmark = pytest.mark.integration
