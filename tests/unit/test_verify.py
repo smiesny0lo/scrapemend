@@ -6,9 +6,9 @@ from typing import Any
 import pytest
 
 from scrapemend.extract import Document, patterns
-from scrapemend.heal.anchors import Anchor
+from scrapemend.heal.anchors import Anchor, rank
 from scrapemend.heal.pages import PageFailure
-from scrapemend.heal.verify import ShadowPlan, VerificationReport, verify
+from scrapemend.heal.verify import SHADOW_SEED, ShadowPlan, VerificationReport, verify
 from scrapemend.pipeline import FieldStats, ListingPage, RunSummary
 from scrapemend.snapshots import SnapshotKind
 from scrapemend.spec import SourceSpec
@@ -415,6 +415,64 @@ def test_the_shadow_run_must_find_the_last_good_runs_records() -> None:
         "container, the detail links or the pagination miss some"
     ]
     assert run(spec(), pages, known={k: v for k, v in KNOWN.items() if k in pages.details}).accepted
+
+
+def found(min_found: float, cap: int | str = 500) -> SourceSpec:
+    data = spec().model_dump(mode="json")
+    data["heal"] |= {"shadow_min_found": min_found, "shadow_max_items": cap}
+    return SourceSpec.model_validate(data)
+
+
+def test_a_source_that_loses_records_naturally_may_need_less_of_them_found() -> None:
+    # 40 of the last good run's 50 records are still listed: 80%, like a notice board
+    # whose closed notices come down between runs.
+    pages = FakePages(
+        {u: h for i, (u, h) in enumerate(DETAILS.items()) if i < 40}, listing_for(URLS)
+    )
+    assert run(found(0.8), pages).accepted
+    assert run(found(0.85), pages).problems == [
+        "the shadow run found 40 of the last good run's 50 records (needs 85%): the item "
+        "container, the detail links or the pagination miss some"
+    ]
+    assert run(found(0.8), pages).min_found == 0.8  # the report says what it was judged by
+
+
+def test_a_sample_from_a_source_with_new_records_may_need_fewer_of_them_known() -> None:
+    # 6 of the 30 records the sample draws are new since the last good run: 24 known.
+    keys = sorted(DETAILS, key=lambda key: rank(key, SHADOW_SEED))[:30]
+    known = {k: v for k, v in KNOWN.items() if k not in keys[:6]}
+    first = f"{BASE}/list"
+    more = MORE | {first: listing_for(URLS)}
+
+    def sample(min_found: float) -> VerificationReport:
+        pages = FakePages(DETAILS, listing_for(URLS), more)
+        report: VerificationReport = run(
+            found(min_found, cap=30), pages, baseline=LISTINGS, known=known
+        )
+        return report
+
+    assert sample(0.8).accepted, sample(0.8).problems
+    assert sample(0.85).problems == [
+        "only 24 of the 30 sampled records are known from the last good run (needs 85%): "
+        "the detail link or the key reads something else"
+    ]
+
+
+def test_a_sample_of_listing_pages_holding_fewer_items_may_be_allowed() -> None:
+    # Listing page 2 now lists 3 notices where the last good run saw 10: the item
+    # container finds 43 of 50 items on the pages drawn.
+    first = f"{BASE}/list"
+    more = MORE | {
+        first: listing_for(URLS),
+        f"{BASE}/list?page=2": listing_for(MORE_URLS[:3], "?page=3"),
+    }
+    pages = FakePages(DETAILS, listing_for(URLS), more)
+    assert run(found(0.85, cap=30), pages, baseline=LISTINGS).accepted
+    pages = FakePages(DETAILS, listing_for(URLS), more)
+    assert run(found(0.9, cap=30), pages, baseline=LISTINGS).problems == [
+        "the item container finds 43 items on 3 sampled listing pages, where the last good "
+        "run found 50 (needs 90%)"
+    ]
 
 
 def test_required_fields_must_be_filled_on_records_the_last_good_run_did_not_have() -> None:

@@ -268,6 +268,11 @@ class HealSpec(_Model):
     # The shadow run: the share of records a volatile field's value may have changed
     # on since the last good run. A value that became empty never counts as a change.
     volatile_change: float = Field(default=0.1, ge=0, le=1)
+    # The share of the last good run's records the shadow run must find again (of the
+    # records a sample draws, the share it must know; of the items on the listing pages
+    # it draws, the share it must find). A source that loses records naturally between
+    # runs (notices that close and come down) may need less.
+    shadow_min_found: float = Field(default=0.9, gt=0, le=1)
     # The records the shadow run reads at most: drawn at random (with a fixed seed)
     # from listing pages across the whole source, when it has more. `all` reads the
     # whole source.

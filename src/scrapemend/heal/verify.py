@@ -34,7 +34,8 @@ reused; the others are fetched politely and stored with the failed run, so the
 same verdict can be reached again from the stored pages. Its records are compared
 with the last good run's, by key:
 
-- the shadow run must find MIN_COVERAGE of the last good run's records;
+- the shadow run must find heal.shadow_min_found (90%) of the last good run's
+  records;
 - on every record both runs have, a stable field must be identical (on
   heal.threshold of them: by default all);
 - a volatile field may have changed on at most heal.volatile_change of them, and a
@@ -87,7 +88,6 @@ PAGINATION_HOPS = 2  # next-page links followed from the first listing page
 MAX_REPEATED_SHARE = 0.5  # of a listing page's items that may already have been seen
 MIN_VALUES = 3  # values a field must read before they are checked against known ones
 MAX_UNKNOWN_SHARE = 0.5  # of those, the share that may be new since the last good run
-MIN_COVERAGE = 0.9  # of the last good run's records the shadow run must find again
 MIN_SHADOW_RECORDS = 20  # records to compare (all of them, if the last good run had fewer)
 SHADOW_SEED = "scrapemend-shadow"  # draws the shadow run's sample, when it samples
 EXAMPLES = 3  # mismatches kept per field (and kind, in the shadow run)
@@ -180,6 +180,7 @@ class VerificationReport(BaseModel):
     threshold: float = 1.0  # share of anchor values a stable field must reproduce
     volatile_match: float = 0.6  # ... and a volatile one
     volatile_change: float = 0.1  # share of shadow-run records a volatile field may change on
+    min_found: float = 0.9  # share of the last good run's records the shadow run must find
     anchors: int = 0  # anchors available
     anchors_checked: int = 0  # anchor pages loaded and compared
     fields: dict[str, FieldCheck] = Field(default_factory=dict)
@@ -358,6 +359,7 @@ def verify(
         threshold=threshold,
         volatile_match=volatile_match,
         volatile_change=spec.heal.volatile_change,
+        min_found=spec.heal.shadow_min_found,
         anchors=len(anchors),
         anchors_checked=len(checked),
         fields=checks,
@@ -718,17 +720,18 @@ def _shadow(
         return run, crawl.problems + problems, stopped
 
     problems = crawl.problems
+    min_found = spec.heal.shadow_min_found
     if sampled:
-        if run.compared < MIN_COVERAGE * crawl.drawn:
+        if run.compared < min_found * crawl.drawn:
             problems.append(
                 f"only {run.compared} of the {crawl.drawn} sampled records are known from the "
-                f"last good run (needs {MIN_COVERAGE:.0%}): the detail link or the key reads "
+                f"last good run (needs {min_found:.0%}): the detail link or the key reads "
                 "something else"
             )
-    elif run.compared < MIN_COVERAGE * len(known):
+    elif run.compared < min_found * len(known):
         problems.append(
             f"the shadow run found {run.compared} of the last good run's {len(known)} records "
-            f"(needs {MIN_COVERAGE:.0%}): the item container, the detail links or the "
+            f"(needs {min_found:.0%}): the item container, the detail links or the "
             "pagination miss some"
         )
     problems += comparison.problems(threshold, spec.heal.volatile_change)
@@ -860,10 +863,11 @@ class _Crawl:
             for key, item in items:
                 if key is not None:
                     pool.setdefault(key, item)
-        if found < MIN_COVERAGE * old:
+        min_found = self.spec.heal.shadow_min_found
+        if found < min_found * old:
             self.problems.append(
                 f"the item container finds {found} items on {len(drawn)} sampled listing "
-                f"pages, where the last good run found {old} (needs {MIN_COVERAGE:.0%})"
+                f"pages, where the last good run found {old} (needs {min_found:.0%})"
             )
         chosen = _choose(pool, cap)
         self.drawn = len(chosen)
