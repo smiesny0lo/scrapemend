@@ -42,7 +42,7 @@ Every run is compared with the **last good run**: the latest complete run whose 
 | Status | Signal | Exit code |
 |---|---|---|
 | `ok` | nothing wrong | 0 |
-| `drift` | the data parses, but is distributed unlike the last good run's: far fewer or more records, a field's empty rate moved by more than 5 points, a value of a small set (a status) that 5% of records had is gone, or numbers changed magnitude; alert only, never repaired | 0 |
+| `drift` | the data parses, but is distributed unlike the last good run's: far fewer or more records, a field's empty rate moved by more than 5 points, a value of a small set (a status) that 5% of records had is gone, or more than 10% of a number field's values changed magnitude; alert only, never repaired | 0 |
 | `blocked` | 401/403, robots.txt disallows, or a bot-wall page; the run stops and nothing tries to get around it | 2 |
 | `transient` | timeouts, 5xx or 429 that outlasted the retries | 2 |
 | `layout_changed` | the page structure changed (fingerprints) and extraction fails | 3 |

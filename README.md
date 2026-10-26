@@ -1,6 +1,6 @@
 # scrapemend
 
-**A self-healing scraper engine for Python.** When a website changes its layout, scrapemend notices, names what broke, gets a repaired spec (from Claude, a plugin, or you), **runs the repair over the site and compares every record with the last good run**, and only then puts it to work.
+**A self-healing scraper engine for Python.** When a website changes its layout, scrapemend notices, names what broke, gets a repaired spec (from Claude, a plugin, or you), **runs the repair over the site and checks what it reads against the last good run's records**, and only then puts it to work.
 
 ```
 scrape v1 ──> site redesigned ──> layout_changed: title, category, ... broken
@@ -83,9 +83,9 @@ For the same story one command at a time, see [examples/demo.md](examples/demo.m
 1. **Scrape.** Each field lists several strategies (css, xpath, label, regex, or a plugin's). The first one whose text converts to the field's type wins. Every downloaded page is kept as a snapshot: for the newest 10 runs, and for older runs that a comparison or a repair still needs.
 2. **Detect.** Every run is compared with the last good one, using page-structure fingerprints, per-field empty rates, and which strategies won. The run is classified as `ok`, `drift`, `blocked`, `transient`, `layout_changed`, `empty` or `partial`.
 3. **Repair.** A provider proposes a patch: new selectors and strategies, nothing else. It can't change the start URL, the rate limit, field types or the checks.
-4. **Verify.** Quick checks first: on pages under the new layout, every field must reproduce the known values of the **anchor** records, each field on its own, and the listing and the next-page link must still work. Then the **shadow run**: the repaired spec crawls the source, politely, and its records are compared with the last good run's, by key. Stable fields must be identical on every record both runs have; a volatile one (a price, a status) may have changed on at most 10% of them, and a value may never become empty. A provider's regexes run on RE2, which no page can make slow. [What the gate guarantees, and what it can't catch](docs/verification.md#what-the-gate-guarantees).
+4. **Verify.** Quick checks first: on pages under the new layout, every field must reproduce the known values of the **anchor** records, each field on its own, and the listing and the next-page link must still work. Then the **shadow run**: the repaired spec crawls the source, politely, and its records are compared with the last good run's, by key (on a large source, every listing page and a sample of the detail pages). Stable fields must be identical on every record both runs have; a volatile one (a price, a status) may have changed on at most 10% of them, and a value may never become empty. No kind of record may be missing, and no number field wrong on its largest or smallest values. Records new since the last good run get only lighter checks, and the report says how many there were. A provider's regexes run on RE2, which no page can make slow. [What the gate guarantees, and what it can't catch](docs/verification.md#what-the-gate-guarantees).
 5. **Promote or quarantine.** A repair that passed every check becomes the next spec version, either automatically (`heal.mode: auto`, with structural evidence, as a provisional version until you `scrapemend confirm` it) or after `scrapemend promote`. If nothing passes, the source is quarantined and an alert goes to your notifiers (`--notify`). A repair whose checks couldn't all run (a page that won't load) is never promoted automatically: only `scrapemend promote --force`, never past a check that failed.
-6. **Watch.** The runs after a promotion are compared with the last good run: an emptier field, a common status gone, or numbers that changed magnitude are `drift`, and alert. A drift run never becomes the last good run by itself, so every run alerts until a human checks the data and runs `scrapemend accept-drift`.
+6. **Watch.** The runs after a promotion are compared with the last good run: an emptier field, a common status gone, or more than 10% of a number field's values changing magnitude are `drift`, and alert. A drift run never becomes the last good run by itself, so every run alerts until a human checks the data and runs `scrapemend accept-drift`. Neither does a run of a version promoted automatically, until you `scrapemend confirm` it.
 
 Blocks are never worked around. A 401/403, a robots.txt disallow or a bot-wall page stops the run as `blocked`, and a 401/403 or a robots.txt disallow during healing stops the heal the same way. scrapemend respects robots.txt, keeps per-domain rate limits, backs off on 429/5xx, and sends an identifiable User-Agent.
 
@@ -128,7 +128,7 @@ Requires Python 3.13+.
 ```sh
 pip install -e ".[dev]"
 pre-commit install
-pytest                     # unit and integration tests, a minute or two
+pytest                     # unit and integration tests, about five minutes
 ruff check . && ruff format .
 mypy                       # strict
 ```
