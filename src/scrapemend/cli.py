@@ -14,7 +14,7 @@ from typing import Annotated, Literal, NoReturn
 import typer
 from pydantic import ValidationError
 
-from scrapemend import __version__
+from scrapemend import __version__, retention
 from scrapemend.detect.classify import Status
 from scrapemend.events import Notifier, Notifiers, make_notifier
 from scrapemend.extract import Extractor
@@ -441,6 +441,36 @@ def show(
     typer.echo(spec_yaml(found.spec).rstrip())
 
 
+@app.command(name="prune")
+def prune_command(
+    spec: SpecArgument,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Only say which runs' snapshots would go.")
+    ] = False,
+    db: DbOption = DEFAULT_DB,
+    snapshots: SnapshotsOption = DEFAULT_SNAPSHOTS,
+) -> None:
+    """Delete the snapshots of a source's older runs: all but the newest
+    snapshots.keep_runs, never those of the last good run, a proposal that can still
+    be promoted, or the last failed run. Every run does this when it ends, too."""
+    state = State(db)
+    source = _active(state, spec).spec
+    pruned = retention.prune(source, state, FilesystemSnapshotStore(snapshots), dry_run=dry_run)
+    keep = source.snapshots.keep_runs
+    newest = "the newest run" if keep == 1 else f"the newest {keep} runs"
+    typer.echo(
+        f"{source.id}: keeps the snapshots of {newest} (snapshots.keep_runs: {keep}) "
+        "and of older runs still needed"
+    )
+    label = "would delete" if dry_run else "deleted"
+    for run_id in pruned.deleted:
+        typer.echo(f"  {label:<12}  {run_id}")
+    if not pruned.deleted:
+        typer.echo("  nothing to delete")
+    for run_id, why in pruned.needed.items():
+        typer.echo(f"  {'kept':<12}  {run_id}: {why}")
+
+
 @app.command(name="accept-drift")
 def accept_drift_command(
     run_id: Annotated[str, typer.Argument(help="A drift run whose data you checked.")],
@@ -670,6 +700,9 @@ def _print_report(report: RunReport, fetcher: HttpFetcher, snapshots: Path) -> N
     if len(summary.failures) > 5:
         err(f"  ... and {len(summary.failures) - 5} more failures")
     err(f"  snapshots: {snapshots / summary.source_id / summary.run_id}")
+    if report.pruned:
+        older = f"{len(report.pruned)} older run{'s' if len(report.pruned) > 1 else ''}"
+        err(f"  pruned: the snapshots of {older}")
     err(f"status: {report.status}")
     for f in report.failures:
         err(f"  {f.category}: {f.message}")

@@ -48,6 +48,9 @@ heal:
   volatile_change: 0.1
   shadow_min_found: 0.9
   shadow_max_items: 500   # all: the shadow run reads the whole source
+
+snapshots:
+  keep_runs: 10           # runs whose pages are kept, besides the ones still needed
 ```
 
 How a run works:
@@ -158,6 +161,17 @@ The other settings:
 - **`heal.shadow_max_items`** caps the records the shadow run reads (default 500; at least 20). A source whose last good run had more is sampled: records drawn at random with a fixed seed from listing pages across the whole source. A sample catches a field wrong on a few records only with some probability (see [what the gate can't catch](verification.md#what-it-cant-catch)). `all` reads the whole source, however large, at the cost of about one request per page; the demo specs use it. Before the shadow run starts, `heal` says how many records it will compare and about how many requests that takes.
 
 A repair can't change any of these settings. [Verification](verification.md) explains each check, and what it can't catch.
+
+## Snapshots
+
+Every page a run downloads is stored as a snapshot, under `--snapshots`. **`snapshots.keep_runs`** (default 10, at least 1) is how many runs' snapshots a source keeps, newest first. After every run, the snapshots of older runs are deleted, except those still needed:
+
+- the last good run's, which runs and repairs are compared with;
+- a drift run's that `scrapemend accept-drift` could still make the last good run;
+- the failed run's of a proposal that can still be promoted (accepted or unverified): `promote` verifies it again on those pages;
+- the last failed run's, which `heal` repairs by default.
+
+`scrapemend prune SPEC` does the same at any time, and `--dry-run` only lists what would go. See [running](running.md#snapshots).
 
 ## Versions
 

@@ -32,6 +32,7 @@ class RunReport(BaseModel):
     diagnosis: Diagnosis | None = None
     error: str | None = None  # why the crawl stopped early, if it did
     accepted_at: AwareDatetime | None = None  # a drift run a human made the baseline
+    pruned: list[str] = Field(default_factory=list)  # older runs whose snapshots it deleted
 
     @property
     def good(self) -> bool:
@@ -101,6 +102,15 @@ class RunStore:
         accepted = report.model_copy(update={"accepted_at": at})
         self.save(accepted)
         return accepted
+
+    def last_failed(self, source_id: str) -> RunReport | None:
+        """The latest run, of any mode, that failed: what heal repairs by default."""
+        row = self.db.execute(
+            "SELECT report FROM runs WHERE source_id = ? AND status NOT IN (?, ?)"
+            " ORDER BY started_at DESC LIMIT 1",
+            (source_id, *GOOD),
+        ).fetchone()
+        return RunReport.model_validate_json(row["report"]) if row else None
 
     def latest(self, source_id: str) -> RunReport | None:
         reports = self.recent(source_id, limit=1)

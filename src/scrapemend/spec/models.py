@@ -285,6 +285,12 @@ class HealSpec(_Model):
         return "all" if value is None else value
 
 
+class SnapshotsSpec(_Model):
+    # Runs whose snapshots are kept, newest first. Older runs' are deleted after every
+    # run, except those still needed (see scrapemend.retention).
+    keep_runs: int = Field(default=10, ge=1)
+
+
 # --- source ---------------------------------------------------------------------------
 
 
@@ -298,6 +304,7 @@ class SourceSpec(_Model):
     item: ItemSpec
     expect: ExpectSpec = Field(default_factory=ExpectSpec)
     heal: HealSpec = Field(default_factory=HealSpec)
+    snapshots: SnapshotsSpec = Field(default_factory=SnapshotsSpec)
 
     @field_validator("id")
     @classmethod

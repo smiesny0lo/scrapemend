@@ -14,6 +14,8 @@ snapshot that looks complete but isn't.
 import json
 import os
 import re
+import shutil
+from datetime import datetime
 from pathlib import Path
 
 from scrapemend.snapshots.base import Snapshot
@@ -70,8 +72,15 @@ class FilesystemSnapshotStore:
         source_dir = self.root / source_id
         if not source_dir.is_dir():
             return []
-        # Run ids start with a UTC timestamp, so name order is time order.
-        return sorted(d.name for d in source_dir.iterdir() if any(d.glob(f"*{_META}")))
+        # A run id starts with the second the run started, then a random suffix: two
+        # runs in one second are told apart by when their first page was fetched.
+        started: dict[str, datetime] = {}
+        for run_dir in source_dir.iterdir():
+            metas = sorted(run_dir.glob(f"*{_META}"))
+            if metas:
+                first = json.loads(metas[0].read_text(encoding="utf-8"))
+                started[run_dir.name] = datetime.fromisoformat(first["fetched_at"])
+        return sorted(started, key=lambda run_id: (run_id[:16], started[run_id], run_id))
 
     def snapshots(self, source_id: str, run_id: str) -> list[str]:
         _check_segment(source_id)
@@ -79,6 +88,13 @@ class FilesystemSnapshotStore:
         run_dir = self.root / source_id / run_id
         seqs = sorted(m.name[:5] for m in run_dir.glob(f"*{_META}"))
         return [f"{source_id}/{run_id}/{seq}" for seq in seqs]
+
+    def delete_run(self, source_id: str, run_id: str) -> None:
+        _check_segment(source_id)
+        _check_segment(run_id)
+        run_dir = self.root / source_id / run_id
+        if run_dir.is_dir():
+            shutil.rmtree(run_dir)
 
     def _next_seq(self, run_dir: Path) -> int:
         seqs = [int(m.group(1)) for p in run_dir.iterdir() if (m := _SEQ.match(p.name))]

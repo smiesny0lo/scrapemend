@@ -69,7 +69,7 @@ For the same story one command at a time, see [examples/demo.md](examples/demo.m
 
 ## How it works
 
-1. **Scrape.** Each field lists several strategies (css, xpath, label, regex, or a plugin's). The first one whose text converts to the field's type wins. Every downloaded page is kept as a snapshot.
+1. **Scrape.** Each field lists several strategies (css, xpath, label, regex, or a plugin's). The first one whose text converts to the field's type wins. Every downloaded page is kept as a snapshot: for the newest 10 runs, and for older runs that a comparison or a repair still needs.
 2. **Detect.** Every run is compared with the last good one, using page-structure fingerprints, per-field empty rates, and which strategies won. The run is classified as `ok`, `drift`, `blocked`, `transient`, `layout_changed`, `empty` or `partial`.
 3. **Repair.** A provider proposes a patch: new selectors and strategies, nothing else. It can't change the start URL, the rate limit, field types or the checks.
 4. **Verify.** Quick checks first: on pages under the new layout, every field must reproduce the known values of the **anchor** records, each field on its own, and the listing and the next-page link must still work. Then the **shadow run**: the repaired spec crawls the source, politely, and its records are compared with the last good run's, by key. Stable fields must be identical on every record both runs have; a volatile one (a price, a status) may have changed on at most 10% of them, and a value may never become empty. A provider's regexes run on RE2, which no page can make slow. [What the gate guarantees, and what it can't catch](docs/verification.md#what-the-gate-guarantees).

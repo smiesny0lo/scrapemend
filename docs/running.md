@@ -15,6 +15,7 @@
 | `scrapemend promote SPEC ID [--force]` | verify proposal ID again and make it the active version. `--force` promotes it when a check couldn't run (never when one failed), and applies a proposal made for another version than the active one to the active version (verified again too) |
 | `scrapemend rollback SPEC [--to N]` | make an older version active again |
 | `scrapemend versions SPEC` / `show SPEC` | stored versions / one version as YAML |
+| `scrapemend prune SPEC [--dry-run]` | delete the snapshots of older runs no one needs any more (every run does this too; see [snapshots](#snapshots)) |
 
 `python -m scrapemend ...` works the same way, which helps when the `scrapemend` script isn't on your PATH.
 
@@ -23,7 +24,7 @@ Shared options, also available as environment variables (see `.env.example`):
 | Option | Variable | Default |
 |---|---|---|
 | `--db` | `SCRAPEMEND_DB` | `scrapemend.db`: run history, baselines, anchors, spec versions, proposals |
-| `--snapshots` | `SCRAPEMEND_SNAPSHOT_DIR` | `snapshots/`: every page downloaded |
+| `--snapshots` | `SCRAPEMEND_SNAPSHOT_DIR` | `snapshots/`: the pages the newest runs downloaded (see [snapshots](#snapshots)) |
 | `--user-agent` | `SCRAPEMEND_USER_AGENT` | `scrapemend/<version> (+https://github.com/smiesny0lo/scrapemend)` |
 | `--notify` | `SCRAPEMEND_NOTIFY` | none; `stdout`, `log` or a plugin's name |
 | `--provider` | `SCRAPEMEND_REPAIR_PROVIDER` | `none`; `anthropic` or a plugin's name |
@@ -78,6 +79,28 @@ status: drift
 - If it is wrong, fix the spec (roll back, or write a new version) and run again.
 
 Only the latest drift run since the last good run can be accepted: its anchors and records are kept until then. An `ok` run in between becomes the last good run instead, and nothing older can be accepted.
+
+## Snapshots
+
+Every page a run downloads is stored under `--snapshots`, one directory per run, before it is parsed. A source keeps the snapshots of its newest `snapshots.keep_runs` runs (default 10). When a run ends, the snapshots of older runs are deleted, except those still needed:
+
+- **the last good run**: runs and repairs are compared with it, and a repair provider is shown its pages;
+- **a drift run that can still be accepted**: `accept-drift` would make it the last good run;
+- **the failed run of a proposal that can still be promoted** (accepted or unverified): `promote` verifies it again on that run's pages, including the ones `heal` fetched for the shadow run;
+- **the last failed run**: `heal` repairs the latest failed run by default, on its pages.
+
+The run's report says when it deleted some (`pruned: the snapshots of 2 older runs`). `scrapemend prune SPEC` prunes at any time, with the active version's `keep_runs`; `--dry-run` only lists what would go:
+
+```
+$ scrapemend prune examples/sources/demo.yaml --dry-run
+tenders-demo: keeps the snapshots of the newest 10 runs (snapshots.keep_runs: 10) and of older runs still needed
+  would delete  20261019T060000Z-1a2b
+  would delete  20261020T060000Z-3c4d
+  kept          20261018T060000Z-5e6f: the last good run
+  kept          20261021T060000Z-7a8b: proposal 3 can still be promoted
+```
+
+A store that fails to delete (a file in use) is logged and skipped: retention never fails a run. Deleting a run's snapshots keeps its report, so `scrapemend runs` still lists it.
 
 ## Politeness
 

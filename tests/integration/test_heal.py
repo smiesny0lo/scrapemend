@@ -804,6 +804,39 @@ def test_without_anchors_a_repair_cannot_be_verified(world: World, tmp_path: Pat
     assert outcome.status == "quarantined" and "no anchors" in outcome.message
 
 
+def keeping(world: World, runs: int, version: int = 2) -> None:
+    """A new version of the spec file, which keeps the snapshots of `runs` runs."""
+    data = file_spec(version=version).model_dump(mode="json")
+    data["snapshots"] = {"keep_runs": runs}
+    world.state.specs.register(SourceSpec.model_validate(data))
+
+
+def test_runs_prune_old_snapshots_but_keep_the_pages_promote_needs(world: World) -> None:
+    keeping(world, 2)
+    [good] = world.snapshots.runs("tenders-demo")  # the last good run's
+    world.layout(2)
+    failed = world.run()
+    [proposal] = world.heal(PatchProvider(load_patch(REPAIRS / "demo-v2.yaml"))).proposals
+    assert proposal.status == "accepted"
+    checks = [world.run(mode="check", limit=5) for _ in range(3)]  # each fails, and prunes
+    # Each run deleted what no one needs: the first check run. The last good run and
+    # the failed run of proposal 1, which can still be promoted, stay.
+    assert world.snapshots.runs("tenders-demo") == [
+        good,
+        failed.run_id,
+        checks[1].run_id,
+        checks[2].run_id,
+    ]
+    assert [c.pruned for c in checks] == [[], [], [checks[0].run_id]]
+    stored = world.state.runs.get(checks[2].run_id)
+    assert stored is not None and stored.pruned == [checks[0].run_id]
+    world.promote(proposal)  # verified again on the failed run's pages
+    healed = world.run()
+    assert healed.status == "ok"  # the new last good run: the old one isn't needed now
+    assert healed.pruned == [good, failed.run_id, checks[1].run_id]
+    assert world.snapshots.runs("tenders-demo") == [checks[2].run_id, healed.run_id]
+
+
 def test_only_accepted_proposals_can_be_promoted(world: World) -> None:
     world.layout(2)
     world.run()
@@ -819,7 +852,7 @@ runner = CliRunner()
 
 def cli_run(world: World, *args: str) -> Any:
     common = ["--db", str(world.db)]
-    if args[0] in ("run", "check", "heal", "promote"):
+    if args[0] in ("run", "check", "heal", "promote", "prune"):
         common += ["--snapshots", str(world.snapshot_dir)]
     if args[0] in ("run", "check", "heal"):
         common += ["--start", f"{world.site.base_url}/notices"]
@@ -909,6 +942,46 @@ def test_cli_says_what_the_shadow_run_will_read_before_it_starts(
         "promote: shadow run: the whole source, all 200 of the last good run's records: every "
         "page it reads is stored, so no requests"
     ) in promoted.output
+
+
+def test_cli_prune(world: World) -> None:
+    [good] = world.snapshots.runs("tenders-demo")
+    world.layout(2)
+    checks = [world.run(mode="check", limit=5).run_id for _ in range(3)]
+    keeping(world, 1)  # fewer than before: three older runs to look at
+    header = (
+        "tenders-demo: keeps the snapshots of the newest run (snapshots.keep_runs: 1) "
+        "and of older runs still needed"
+    )
+    dry = cli_run(world, "prune", "--dry-run")
+    assert dry.exit_code == 0, dry.output
+    assert dry.output.splitlines() == [
+        header,
+        f"  would delete  {checks[0]}",
+        f"  would delete  {checks[1]}",
+        f"  kept          {good}: the last good run",
+    ]
+    assert len(world.snapshots.runs("tenders-demo")) == 4
+
+    pruned = cli_run(world, "prune")
+    assert pruned.exit_code == 0, pruned.output
+    assert pruned.output.splitlines() == [
+        header,
+        f"  deleted       {checks[0]}",
+        f"  deleted       {checks[1]}",
+        f"  kept          {good}: the last good run",
+    ]
+    assert world.snapshots.runs("tenders-demo") == [good, checks[2]]
+    # A run prunes too, and says so.
+    checked = cli_run(world, "check")
+    assert checked.exit_code == 3, checked.output
+    assert "  pruned: the snapshots of 1 older run" in checked.output
+    again = cli_run(world, "prune")
+    assert again.output.splitlines() == [
+        header,
+        "  nothing to delete",
+        f"  kept          {good}: the last good run",
+    ]
 
 
 def test_cli_promote_verifies_the_proposal_again(world: World) -> None:

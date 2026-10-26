@@ -1,6 +1,7 @@
 """One judged run of a source: crawl, validate, compare with the last good run,
-classify, record, notify."""
+classify, record, prune old snapshots, notify."""
 
+import logging
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 
@@ -12,6 +13,7 @@ from scrapemend.extract.select import find_link
 from scrapemend.fetch import Fetcher, FetchError
 from scrapemend.heal.anchors import Anchor, AnchorPicker, encode
 from scrapemend.pipeline import RunAborted, RunSummary, SourceRun, ValidatedRecord
+from scrapemend.retention import prune
 from scrapemend.runs import RunMode, RunReport, RunStore
 from scrapemend.snapshots import SnapshotStore
 from scrapemend.spec import SourceSpec
@@ -42,6 +44,7 @@ def run_source(
     and refreshes the source's anchors and known records. A drift run doesn't: the
     runs after it are compared with the same last good run, and keep drifting, until
     a human accepts its drift (accept_drift), for which its anchors are held.
+    Then the snapshots of older runs no one needs are deleted (scrapemend.retention).
     """
     runs = state.runs
     started = datetime.now(UTC)
@@ -121,6 +124,9 @@ def run_source(
         state.anchors.replace(spec.id, picker.anchors(), picker.records())
     elif complete and report.status == "drift":
         state.anchors.hold(spec.id, summary.run_id, picker.anchors(), picker.records())
+    if pruned := _prune(spec, state, snapshots):
+        report = report.model_copy(update={"pruned": pruned})
+        runs.save(report)
     if notifier is not None:
         _notify(notifier, report, previous)
     return report
@@ -157,6 +163,16 @@ def accept_drift(state: State, run_id: str) -> RunReport:
     state.anchors.accept(report.source_id, run_id)
     _set_fingerprints(state.runs, report.summary)
     return state.runs.accept(run_id, datetime.now(UTC))
+
+
+def _prune(spec: SourceSpec, state: State, snapshots: SnapshotStore) -> list[str]:
+    """The older runs whose snapshots were deleted. A store that fails to delete is
+    logged and skipped: retention must never break a run."""
+    try:
+        return prune(spec, state, snapshots).deleted
+    except Exception:
+        logging.getLogger("scrapemend").exception("pruning the snapshots of %s failed", spec.id)
+        return []
 
 
 def _set_fingerprints(runs: RunStore, summary: RunSummary) -> None:
