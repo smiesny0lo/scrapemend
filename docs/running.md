@@ -9,6 +9,7 @@
 | `scrapemend check SPEC [--sample 5]` | scrape a small sample and judge it; writes no records, never changes the baseline, never heals |
 | `scrapemend runs [SOURCE_ID]` | run history, newest first |
 | `scrapemend accept-drift RUN_ID` | make a drift run the last good run, once you have checked its data (see [drift](#drift)) |
+| `scrapemend confirm SPEC VERSION` | confirm a version `heal` promoted automatically, once you have checked its data: its runs become the last good run again (see [provisional versions](#provisional-versions)) |
 | `scrapemend heal SPEC [--provider P \| --patch FILE]` | repair the latest failed run, verify the repair (with a shadow run over the source), promote it or leave it for review |
 | `scrapemend proposals SPEC` | repair proposals with their verification score |
 | `scrapemend diff SPEC ID` | what proposal ID would change, as a diff of the spec |
@@ -64,7 +65,7 @@ status: layout_changed
 
 **Warnings** don't fail a run but still alert. For example, *fields working only through fallback strategies* means the data is fine, but the page is starting to change.
 
-Only a complete `ok` run of `scrapemend run` updates the baseline: the last good run, its page fingerprints, its anchors and its records. `check` and `--limit` runs never do, and neither does a `drift` run.
+Only a complete `ok` run of `scrapemend run` updates the baseline: the last good run, its page fingerprints, its anchors and its records. `check` and `--limit` runs never do, and neither does a `drift` run, or a run of a [provisional version](#provisional-versions).
 
 ### Drift
 
@@ -82,12 +83,29 @@ status: drift
 
 Only the latest drift run since the last good run can be accepted: its anchors and records are kept until then. An `ok` run in between becomes the last good run instead, and nothing older can be accepted.
 
+### Provisional versions
+
+A version that `heal` promoted by itself (`heal.mode: auto`) is **provisional**: no human has looked at it. Its runs write their records as usual, but they don't become the last good run. Later runs, and the repairs of later breakages, are still compared with the last good run before the promotion, and every run of the version warns:
+
+```
+  warning: v2 was promoted automatically and is provisional: its runs don't become the last good run, and runs and repairs are compared with run 20261026T090000Z-3f9a, until you check its data and confirm it: scrapemend confirm <spec> 2
+```
+
+So a repair that is wrong on a few records, in a way the gate can't catch, never becomes the standard the next repair is held to. Check its data, then:
+
+- If it is right, confirm it: `scrapemend confirm SPEC VERSION`. Its latest good run becomes the last good run, with its page fingerprints, anchors and records, and so does every good run of it after that.
+- If it is wrong, roll back, or fix the spec in a new version.
+
+A version you promote with `scrapemend promote` is confirmed by you. Accepting a drift run of a provisional version (`accept-drift`) confirms that version too. `scrapemend versions` marks the provisional ones.
+
+Don't leave a version provisional for long. The last good run it is compared with keeps ageing, and on a source whose records come and go, a correct repair verified against it may fail for coverage (see [sources that churn](verification.md#sources-that-churn)).
+
 ## Snapshots
 
 Every page a run downloads is stored under `--snapshots`, one directory per run, before it is parsed. A source keeps the snapshots of its newest `snapshots.keep_runs` runs (default 10). When a run ends, the snapshots of older runs are deleted, except those still needed:
 
 - **the last good run**: runs and repairs are compared with it, and a repair provider is shown its pages;
-- **a drift run that can still be accepted**: `accept-drift` would make it the last good run;
+- **a drift run that can still be accepted**, or **the latest good run of a provisional version**: `accept-drift` or `confirm` would make it the last good run;
 - **the failed run of a proposal that can still be promoted** (accepted or unverified): `promote` verifies it again on that run's pages, including the ones `heal` fetched for the shadow run;
 - **the last failed run**: `heal` repairs the latest failed run by default, on its pages.
 

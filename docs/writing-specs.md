@@ -151,6 +151,8 @@ Details:
   - the failure carries structural evidence (the page fingerprint changed);
   - the repair's confidence is at least 0.5.
 
+  The version it becomes is provisional until you confirm it (`scrapemend confirm`): its runs don't become the last good run before that. See [provisional versions](running.md#provisional-versions).
+
 The other settings:
 
 - **`heal.anchors`** is the number of known-good records kept for verifying repairs. More anchors catch errors that affect fewer records.

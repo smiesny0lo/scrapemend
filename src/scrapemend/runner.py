@@ -43,7 +43,10 @@ def run_source(
     `keep_invalid`). Only a complete ok run of mode "run" becomes the new baseline
     and refreshes the source's anchors and known records. A drift run doesn't: the
     runs after it are compared with the same last good run, and keep drifting, until
-    a human accepts its drift (accept_drift), for which its anchors are held.
+    a human accepts its drift (accept_drift), for which its anchors are held. Nor
+    does an ok run of a provisional version, one heal promoted automatically: its
+    anchors are held until a human confirms the version (confirm), and every such
+    run warns.
     Then the snapshots of older runs no one needs are deleted (scrapemend.retention).
     """
     runs = state.runs
@@ -52,6 +55,7 @@ def run_source(
     previous = runs.latest(spec.id)
     baseline_report = runs.last_good(spec.id)
     baseline = baseline_report.summary if baseline_report else None
+    provisional = state.specs.is_provisional(spec.id, spec.version)
 
     crawl = SourceRun(spec, fetcher, snapshots, limit=limit)
     picker = AnchorPicker(spec.heal.anchors, spec.item.key, crawl.summary.run_id)
@@ -103,6 +107,13 @@ def run_source(
             next_link_missing=next_link_missing,
         )
     )
+    if provisional:
+        since = f"run {baseline_report.run_id}" if baseline_report else "the last good run"
+        warnings.append(
+            f"v{spec.version} was promoted automatically and is provisional: its runs don't "
+            f"become the last good run, and runs and repairs are compared with {since}, "
+            f"until you check its data and confirm it: scrapemend confirm <spec> {spec.version}"
+        )
     report = RunReport(
         run_id=summary.run_id,
         source_id=spec.id,
@@ -119,12 +130,13 @@ def run_source(
         diagnosis=diagnosis,
         error=str(error) if error else None,
         requests=Requests.since(fetcher, sent),
+        provisional=provisional,
     )
     runs.save(report)
-    if complete and report.status == "ok":
+    if complete and report.status == "ok" and not provisional:
         _set_fingerprints(runs, summary)
         state.anchors.replace(spec.id, picker.anchors(), picker.records())
-    elif complete and report.status == "drift":
+    elif complete and report.status in ("ok", "drift"):
         state.anchors.hold(spec.id, summary.run_id, picker.anchors(), picker.records())
     if pruned := _prune(spec, state, snapshots):
         report = report.model_copy(update={"pruned": pruned})
@@ -138,11 +150,42 @@ class DriftNotAccepted(ValueError):
     """A run can't be accepted: it isn't the latest drift run since the last good run."""
 
 
+class ConfirmRefused(ValueError):
+    """A version can't be confirmed: it doesn't exist, heal didn't promote it
+    automatically, or it was confirmed already."""
+
+
+def confirm(state: State, source_id: str, version: int) -> RunReport | None:
+    """Confirm a version that heal promoted automatically, because a human checked its
+    data: its runs become the last good run from now on, like any version's. If its
+    latest complete ok run is held (no drift run came after it), that run becomes the
+    last good run now, with its page fingerprints, anchors and records, and is
+    returned; otherwise its next ok run will be."""
+    stored = state.specs.get(source_id, version)
+    if stored is None:
+        raise ConfirmRefused(f"{source_id} has no version {version}")
+    if not state.specs.promoted_automatically(source_id, version):
+        raise ConfirmRefused(
+            f"{source_id} v{version} was not promoted automatically: there is nothing to confirm"
+        )
+    if not stored.provisional:
+        raise ConfirmRefused(f"{source_id} v{version} is confirmed already")
+    state.specs.confirm(source_id, version)
+    held = state.anchors.held(source_id)
+    report = state.runs.get(held) if held is not None else None
+    if report is None or report.status != "ok" or report.spec_version != version:
+        return None
+    state.anchors.accept(source_id, report.run_id)
+    _set_fingerprints(state.runs, report.summary)
+    return state.runs.accept(report.run_id, datetime.now(UTC))
+
+
 def accept_drift(state: State, run_id: str) -> RunReport:
     """Make a drift run the baseline, because a human checked that its data is right:
     the runs after it, and repairs, are compared with it. Its anchors and records
     must still be held, which they are for the latest drift run since the last good
-    run. The run keeps its status; it is marked accepted."""
+    run. The run keeps its status; it is marked accepted. If its version was
+    promoted automatically, accepting its data confirms that version too."""
     report = state.runs.get(run_id)
     if report is None:
         raise DriftNotAccepted(f"there is no run {run_id}")
@@ -159,11 +202,19 @@ def accept_drift(state: State, run_id: str) -> RunReport:
     if held != run_id:
         if held is None:
             raise DriftNotAccepted(f"run {run_id}'s records were not kept, so it can't be accepted")
+        newer = state.runs.get(held)
+        if newer is not None and newer.status == "ok":
+            raise DriftNotAccepted(
+                f"run {held} of provisional v{newer.spec_version} is newer, and its records "
+                f"are kept instead: check its data and confirm v{newer.spec_version}"
+            )
         raise DriftNotAccepted(
             f"only the latest drift run's records are kept: review run {held} and accept it"
         )
     state.anchors.accept(report.source_id, run_id)
     _set_fingerprints(state.runs, report.summary)
+    if state.specs.is_provisional(report.source_id, report.spec_version):
+        state.specs.confirm(report.source_id, report.spec_version)
     return state.runs.accept(run_id, datetime.now(UTC))
 
 

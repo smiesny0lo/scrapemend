@@ -32,7 +32,10 @@ class RunReport(BaseModel):
     structure: dict[str, float] = Field(default_factory=dict)  # kind -> similarity to baseline
     diagnosis: Diagnosis | None = None
     error: str | None = None  # why the crawl stopped early, if it did
-    accepted_at: AwareDatetime | None = None  # a drift run a human made the baseline
+    # A human made this run the baseline: a drift run they accepted, or a provisional
+    # version's run, when they confirmed the version.
+    accepted_at: AwareDatetime | None = None
+    provisional: bool = False  # its version was promoted automatically, not confirmed yet
     pruned: list[str] = Field(default_factory=list)  # older runs whose snapshots it deleted
     requests: Requests | None = None  # what this run sent, if its fetcher counts
 
@@ -83,9 +86,12 @@ class RunStore:
         """The baseline later runs and repairs are compared with: the latest complete
         run that was ok, or whose drift a human accepted (see runner.accept_drift).
         Until then a drift run is not: the runs after it are compared with the same
-        last good run as it was, so they keep drifting, and alerting."""
+        last good run as it was, so they keep drifting, and alerting. Neither is an ok
+        run of a provisional version, until a human confirms it (runner.confirm)."""
         rows = self.db.execute(
-            "SELECT report FROM runs WHERE source_id = ? AND mode = 'run' AND (status = 'ok'"
+            "SELECT report FROM runs WHERE source_id = ? AND mode = 'run' AND ("
+            "(status = 'ok' AND (COALESCE(json_extract(report, '$.provisional'), 0) = 0"
+            " OR json_extract(report, '$.accepted_at') IS NOT NULL))"
             " OR (status = 'drift' AND json_extract(report, '$.accepted_at') IS NOT NULL))"
             " ORDER BY started_at DESC",
             (source_id,),
@@ -97,7 +103,8 @@ class RunStore:
         return None
 
     def accept(self, run_id: str, at: datetime) -> RunReport:
-        """Mark a drift run as accepted by a human, which makes it the last good run."""
+        """Mark a drift run, or a provisional version's run, as accepted by a human,
+        which makes it the last good run."""
         report = self.get(run_id)
         if report is None:
             raise KeyError(run_id)

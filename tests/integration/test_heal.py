@@ -339,7 +339,8 @@ def test_auto_mode_heals_within_one_run(world: World, layout: int) -> None:
     assert first.status == "layout_changed"
     assert outcome is not None and outcome.status == "promoted" and outcome.version == 3
     assert second is not None and (second.status, second.summary.valid_records) == ("ok", 200)
-    assert world.events.kinds == ["run_failed", "repair_promoted", "run_recovered"]
+    # The run on the version auto mode promoted warns that it is provisional.
+    assert world.events.kinds == ["run_failed", "repair_promoted", "run_recovered", "warning"]
 
 
 def test_one_spec_heals_through_both_redesigns(world: World) -> None:
@@ -601,6 +602,109 @@ def test_drift_alerts_on_every_run_until_a_human_accepts_it(world: World, tmp_pa
     world.events.events.clear()
     after = world.run()
     assert (after.status, world.events.kinds) == ("ok", [])
+
+
+# --- provisional versions: what auto mode promotes is checked by a human before it is the
+# reference --------------------------------------------------------------------------------
+
+
+def largest_value(world: World) -> object:
+    """The known value of the notice with the largest amount, as runs and repairs are
+    compared with."""
+    top = max((n for n in NOTICES if n.value is not None), key=lambda n: n.value or 0)
+    known = world.state.anchors.records("tenders-demo")
+    return known[f"{world.site.base_url}/notices/{top.id}"]["value"]
+
+
+def test_a_wrong_repair_promoted_automatically_does_not_become_the_reference(
+    world: World,
+) -> None:
+    # Review attack B7: B1 (value wrong on the 5 largest amounts) was promoted in auto
+    # mode, and its run became the last good run. At the next redesign the gate
+    # compared repairs with B1's values: the correct one "changed" 5 values, and B1's
+    # bug on layout v3 matched all 200. Today's gate rejects B1, so it is stored here
+    # as auto mode stores what it promotes, as if the gate had let it through.
+    good = world.state.runs.last_good("tenders-demo")
+    assert good is not None
+    right = largest_value(world)
+    world.layout(2)
+    world.run()
+    active = world.state.specs.active("tenders-demo")
+    assert active is not None
+    b1 = load_patch(BAD / "v2-value-misreads-over-2m.yaml").apply(active.spec, version=2)
+    world.state.specs.add(b1, "repair", "promoted automatically", provisional=True)
+    world.state.specs.activate("tenders-demo", 2)
+
+    ran = world.run()
+    assert (ran.status, ran.provisional) == ("ok", True)  # 5 values wrong, as B1 reads them
+    assert any("v2 was promoted automatically" in w for w in ran.warnings), ran.warnings
+    # B1's output doesn't become the reference: the last good run, its anchors and its
+    # records are still v1's.
+    still = world.state.runs.last_good("tenders-demo")
+    assert still is not None and still.run_id == good.run_id
+    assert {a.run_id for a in world.state.anchors.all("tenders-demo")} == {good.run_id}
+    assert largest_value(world) == right
+
+    world.layout(3)
+    assert world.run().status == "layout_changed"
+    correct = world.heal(PatchProvider(load_patch(REPAIRS / "demo-v3.yaml")))
+    [proposal] = correct.proposals
+    assert proposal.status == "accepted", proposal.report.problems
+    assert proposal.report.shadow is not None
+    assert proposal.report.shadow.fields["value"].matched == 200  # against v1's values
+    wrong = world.heal(PatchProvider(load_patch(BAD / "v3-value-misreads-over-2m.yaml")))
+    [proposal] = wrong.proposals
+    assert proposal.status == "rejected"
+    assert proposal.report.problems[0].startswith("value changed on 5 of the 10 records")
+
+
+def test_auto_mode_promotes_a_provisional_version_until_a_human_confirms_it(
+    world: World,
+) -> None:
+    good = world.state.runs.last_good("tenders-demo")
+    assert good is not None
+    world.layout(2)
+    world.state.specs.register(file_spec(mode="auto", version=2))
+    spec = world.spec
+    provider = PatchProvider(load_patch(REPAIRS / "demo-v2.yaml"))
+    _, outcome, second = run_and_heal(
+        spec, world.state, world.snapshots, fetcher(world.site, spec), provider,
+        notifier=world.events, rebase=world.rebase,
+    )  # fmt: skip
+    assert outcome is not None and outcome.status == "promoted" and outcome.version == 3
+    assert "scrapemend confirm <spec> 3" in outcome.message
+    assert world.state.specs.is_provisional("tenders-demo", 3)
+    assert second is not None and (second.status, second.provisional) == ("ok", True)
+    last = world.state.runs.last_good("tenders-demo")
+    assert last is not None and last.run_id == good.run_id  # not the run after it
+
+    versions = cli_run(world, "versions")
+    assert "provisional" in versions.output, versions.output
+    confirmed = cli_run(world, "confirm", "3")
+    assert confirmed.exit_code == 0, confirmed.output
+    assert confirmed.output.strip() == (
+        f"tenders-demo: v3 confirmed: its run {second.run_id} is the last good run now, "
+        "with its 200 records"
+    )
+    last = world.state.runs.last_good("tenders-demo")
+    assert last is not None and last.run_id == second.run_id
+    assert {a.run_id for a in world.state.anchors.all("tenders-demo")} == {second.run_id}
+    after = world.run()
+    assert (after.status, after.provisional, after.warnings) == ("ok", False, [])
+    again = cli_run(world, "confirm", "3")
+    assert again.exit_code == 1 and "v3 is confirmed already" in again.output
+
+
+def test_a_version_promoted_by_hand_needs_no_confirming(world: World) -> None:
+    world.layout(2)
+    world.run()
+    [proposal] = world.heal(PatchProvider(load_patch(REPAIRS / "demo-v2.yaml"))).proposals
+    world.promote(proposal)
+    assert not world.state.specs.is_provisional("tenders-demo", 2)
+    healed = world.run()
+    assert (healed.status, healed.provisional) == ("ok", False)
+    last = world.state.runs.last_good("tenders-demo")
+    assert last is not None and last.run_id == healed.run_id
 
 
 # --- regexes ---------------------------------------------------------------------------------

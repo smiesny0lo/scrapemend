@@ -184,7 +184,7 @@ The same checks run whether the repair is promoted by `scrapemend promote` or au
 - **Changes after the verification.** `promote` verifies again on the pages `heal` stored, not on the site as it is now. A redesign in between isn't seen until the next run.
 - **Pagination past `max_pages`**, and **custom strategies sharing an element**: the shared-element check needs to know which element a strategy read, which a custom strategy only says if it has a `locate(doc)` method.
 
-**After promotion**, the runs that follow are compared with the last good run too: a field whose empty rate moves by more than 5 points, a common value of a small set (5% of records or more) that disappears, or numbers that change magnitude make the run `drift`, which alerts. A drift run doesn't become the last good run, so every run after it drifts and alerts too, until a human accepts one with `scrapemend accept-drift` (see [drift](running.md#drift)). Watch the first runs after a promotion anyway.
+**After promotion**, the runs that follow are compared with the last good run too: a field whose empty rate moves by more than 5 points, a common value of a small set (5% of records or more) that disappears, or numbers that change magnitude make the run `drift`, which alerts. A drift run doesn't become the last good run, so every run after it drifts and alerts too, until a human accepts one with `scrapemend accept-drift` (see [drift](running.md#drift)). Neither do the runs of a version promoted automatically, until a human confirms it. Watch the first runs after a promotion anyway.
 
 **It can reject a correct repair** when the data really changed: a stable field corrected since the last good run on any record, more than 10% of a volatile field's values changed, more than 10% of the records gone, or a small set of values replaced wholesale (statuses renamed). `--force` can't help there: the check failed. Look at the report, then mark the field `volatile`, or loosen `heal.threshold`, `heal.volatile_change` or `heal.shadow_min_found`, in a new version of the spec file, and run it again. If you have checked the repair yourself, you can also write it into that new version: a spec file you edit is yours, not a repair, and isn't verified.
 
@@ -196,7 +196,7 @@ An accepted repair is stored as a proposal. Under `heal.mode: auto`, it is promo
 - the repair passed every check;
 - the repair's confidence is at least 0.5.
 
-Before it is promoted, it is verified again exactly as `scrapemend promote` would, and it is not promoted if that doesn't pass. A `partial` failure (one field broken on an unchanged page) is never promoted automatically: the site may have legitimately stopped showing that field. In `propose` mode, every accepted repair waits for:
+Before it is promoted, it is verified again exactly as `scrapemend promote` would, and it is not promoted if that doesn't pass. The version it becomes is **provisional** until a human confirms it (see [provisional versions](running.md#provisional-versions)): its runs never become the last good run by themselves, so a repair that is wrong in a way the gate can't catch never becomes what the next repair is compared with. A `partial` failure (one field broken on an unchanged page) is never promoted automatically: the site may have legitimately stopped showing that field. In `propose` mode, every accepted repair waits for:
 
 ```sh
 scrapemend diff SPEC ID      # review it

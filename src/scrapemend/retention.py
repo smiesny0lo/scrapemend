@@ -3,7 +3,8 @@ runs, and of every older run something still needs:
 
 - the last good run: runs and repairs are compared with it, and repair providers
   are shown its pages;
-- the drift run held for accept-drift, which would make it the last good run;
+- the run held for accept-drift or confirm, which would make it the last good run:
+  a drift run, or a provisional version's run;
 - the failed run of a proposal that can still be promoted (accepted or unverified):
   promote verifies it again on that run's pages;
 - the last failed run: heal repairs it by default, on its pages.
@@ -50,7 +51,12 @@ def needed(state: State, source_id: str) -> dict[str, str]:
         reasons.setdefault(good.run_id, []).append("the last good run")
     held = state.anchors.held(source_id)
     if held is not None:
-        reasons.setdefault(held, []).append("the drift run that can be accepted")
+        report = state.runs.get(held)
+        if report is not None and report.status == "ok":
+            why = f"the run that confirming v{report.spec_version} makes the last good run"
+        else:
+            why = "the drift run that can be accepted"
+        reasons.setdefault(held, []).append(why)
     for proposal in reversed(state.proposals.for_source(source_id)):  # oldest first
         if proposal.status in PROMOTABLE:
             reasons.setdefault(proposal.run_id, []).append(

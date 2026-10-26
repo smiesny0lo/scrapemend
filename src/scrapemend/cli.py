@@ -33,7 +33,7 @@ from scrapemend.heal.pages import PageSource
 from scrapemend.heal.providers import PatchProvider, ProviderError, RepairProvider, make_provider
 from scrapemend.heal.verify import ShadowPlan
 from scrapemend.pipeline import ValidatedRecord
-from scrapemend.runner import DriftNotAccepted, accept_drift, run_source
+from scrapemend.runner import ConfirmRefused, DriftNotAccepted, accept_drift, confirm, run_source
 from scrapemend.runs import RunReport
 from scrapemend.snapshots import FilesystemSnapshotStore
 from scrapemend.spec import SourceSpec, SpecError, load_patch, load_spec
@@ -420,7 +420,10 @@ def versions(spec: SpecArgument, db: DbOption = DEFAULT_DB) -> None:
     current = state.specs.state(source_id)
     for v in history:
         mark = "*" if current and v.version == current.active_version else " "
-        typer.echo(f"{mark} v{v.version:<3} {v.origin:<6} {v.created_at:%Y-%m-%d %H:%M}  {v.note}")
+        note = (
+            f"provisional (confirm it: scrapemend confirm); {v.note}" if v.provisional else v.note
+        )
+        typer.echo(f"{mark} v{v.version:<3} {v.origin:<6} {v.created_at:%Y-%m-%d %H:%M}  {note}")
     if current and current.quarantine_reason:
         typer.echo(f"quarantined: {current.quarantine_reason}")
 
@@ -487,6 +490,33 @@ def accept_drift_command(
     typer.echo(
         f"{report.source_id}: drift run {run_id} accepted: later runs and repairs are "
         f"compared with its {report.summary.valid_records} records"
+    )
+
+
+@app.command(name="confirm")
+def confirm_command(
+    spec: SpecArgument,
+    version: Annotated[int, typer.Argument(help="A version heal promoted automatically.")],
+    db: DbOption = DEFAULT_DB,
+) -> None:
+    """Confirm a spec version that heal promoted automatically, once you have checked
+    its data: its latest good run becomes the last good run, and later runs and
+    repairs are compared with it. Until then they are compared with the last good run
+    before the promotion."""
+    state = State(db)
+    source_id = _load(spec).id
+    try:
+        report = confirm(state, source_id, version)
+    except ConfirmRefused as e:
+        _fail(str(e))
+    if report is None:
+        typer.echo(
+            f"{source_id}: v{version} confirmed: its next good run becomes the last good run"
+        )
+        return
+    typer.echo(
+        f"{source_id}: v{version} confirmed: its run {report.run_id} is the last good run now, "
+        f"with its {report.summary.valid_records} records"
     )
 
 

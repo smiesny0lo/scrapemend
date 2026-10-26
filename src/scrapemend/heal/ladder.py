@@ -7,7 +7,8 @@ patch back for another attempt. Then:
 
 - promote, in heal.mode "auto", if the failure carries structural evidence (the
   page fingerprint changed), the patch passed every check and its confidence is
-  high enough;
+  high enough. The version is provisional: its runs don't become the last good
+  run until a human confirms it (scrapemend.runner.confirm);
 - propose: a passed patch otherwise waits for `scrapemend promote`;
 - quarantine: no patch passed, so a human has to look, and an alert goes out. A
   patch whose checks couldn't all run (a page didn't load) is kept as unverified:
@@ -208,7 +209,7 @@ def _heal(
             snapshots, spec.id, failed.run_id, fetcher=fetcher, spec_version=spec.version
         )
         try:
-            version = promote(state, accepted, fresh, on_shadow=on_shadow)
+            version = promote(state, accepted, fresh, on_shadow=on_shadow, provisional=True)
         except PromotionRefused as e:
             reason = (
                 f"proposal {accepted.id} passed verification, but not again to be promoted: {e}"
@@ -222,7 +223,11 @@ def _heal(
                 run_id=failed.run_id,
                 proposals=[state.proposals.get(p.id) or p for p in proposals],
             )
-        message = f"proposal {accepted.id} passed verification and is now v{version.version}"
+        message = (
+            f"proposal {accepted.id} passed verification and is now v{version.version}, "
+            "provisional: its runs aren't the last good run until you check its data and "
+            f"confirm it: scrapemend confirm <spec> {version.version}"
+        )
         alert("repair_promoted", message)
         return HealOutcome(
             source_id=spec.id,
@@ -262,6 +267,7 @@ def promote(
     *,
     force: bool = False,
     on_shadow: Callable[[ShadowPlan], None] | None = None,
+    provisional: bool = False,
 ) -> SpecVersion:
     """Verify a proposal again and store it as the new active spec version.
 
@@ -271,7 +277,9 @@ def promote(
     when a check couldn't run, never when one failed, and applies a proposal made
     for an older version than the active one to the active version, verified like
     that. The patch is applied to a stored version, so a runtime override (like
-    --start) never leaks into the stored spec.
+    --start) never leaks into the stored spec. `provisional`: promoted automatically,
+    so no human has looked at it (see scrapemend.runner.confirm); a promotion by hand
+    is confirmed by that human.
     """
     source_id = proposal.source_id
     if proposal.status not in ("accepted", "unverified"):
@@ -320,7 +328,7 @@ def promote(
     if report.not_run:
         names = ", ".join(check.name for check in report.not_run)
         note = f"forced past checks that did not run: {names}; {note}"
-    stored = state.specs.add(spec, "repair", note.strip()[:500])
+    stored = state.specs.add(spec, "repair", note.strip()[:500], provisional=provisional)
     state.specs.activate(source_id, version)
     state.proposals.mark_promoted(proposal.id, version)
     return stored
