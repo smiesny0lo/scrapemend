@@ -123,7 +123,7 @@ scrapemend diff examples/sources/demo.yaml 1
 scrapemend promote examples/sources/demo.yaml 1
 ```
 
-`promote` runs the verification gate once more before it changes anything, on the pages `heal` stored. The repair is now spec **version 2**. The YAML file on disk is untouched: specs are versioned, never edited in place. `scrapemend versions examples/sources/demo.yaml` shows both versions.
+`promote` runs the verification gate once more before it changes anything, on the pages `heal` stored: its shadow run says that every page it reads is stored, so it sends no requests. The repair is now spec **version 2**. The YAML file on disk is untouched: specs are versioned, never edited in place. `scrapemend versions examples/sources/demo.yaml` shows both versions.
 
 ## 7. Scrape again
 

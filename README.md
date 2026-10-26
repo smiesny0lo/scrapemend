@@ -50,6 +50,8 @@ It starts a local demo site and scrapes it, then redesigns the site underneath t
   +    css: table.tender-table tr.tender-row
   ...
 == 4. Promote it: the repaired spec becomes version 2
+  promote: shadow run: the whole source, all 200 of the last good run's records: every page
+    it reads is stored, so no requests
   tenders-demo: proposal 1 verified again; every check passed; promoted; v2 is now active
 == 5. Scrape the redesigned site again
   tenders-demo v2, run 20261025T223831Z-ef9f: 10 listing pages, 200 items, 200 records, 0 invalid, 0 failed
