@@ -237,7 +237,7 @@ An accepted repair is stored as a proposal. Under `heal.mode: auto`, it is promo
 - the repair passed every check;
 - the repair's confidence is at least 0.5.
 
-Before it is promoted, it is verified again exactly as `scrapemend promote` would, and it is not promoted if that doesn't pass. The version it becomes is **provisional** until a human confirms it (see [provisional versions](running.md#provisional-versions)): its runs never become the last good run by themselves, so a repair that is wrong in a way the gate can't catch never becomes what the next repair is compared with. A `partial` failure (one field broken on an unchanged page) is never promoted automatically: the site may have legitimately stopped showing that field. In `propose` mode, every accepted repair waits for:
+Before it is promoted, it is verified again exactly as `scrapemend promote` would, and it is not promoted if that doesn't pass. The version it becomes is **provisional** until a human confirms it (see [provisional versions](running.md#provisional-versions)): its runs never become the last good run by themselves, so a repair that is wrong in a way the gate can't catch never becomes what the next repair is compared with. A `partial` failure (one field broken on an unchanged page) is never promoted automatically: the site may have legitimately stopped showing that field. `propose` is the default; [choosing `auto`](writing-specs.md#healing-settings) says what auto mode trades away. In `propose` mode, every accepted repair waits for:
 
 ```sh
 scrapemend diff SPEC ID      # review it

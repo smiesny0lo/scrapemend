@@ -153,6 +153,10 @@ Details:
 
   The version it becomes is provisional until you confirm it (`scrapemend confirm`): its runs don't become the last good run before that. See [provisional versions](running.md#provisional-versions).
 
+**Choosing `auto`.** Auto mode trades a human's look for time. A site that changes its layout at night is scraped with a repaired spec before anyone is awake, and the run after the promotion says `ok`. The price is that whatever the gate can't catch reaches your output with no one looking: a field wrong only on records the last good run didn't have, a volatile value wrong on a few records within its allowance, a field wrong on a few records a sample didn't read (see [what it can't catch](verification.md#what-it-cant-catch)). Each of those passed the gate in a review, and the run after it said `ok`. The report that says what the gate let through goes with the `repair_promoted` alert and stays in `scrapemend proposals`, but nobody reads it before the data flows. The provisional version keeps such an error from becoming what the next repair is compared with, not out of the records you already wrote. The confidence of at least 0.5 is the provider's own claim, so it filters nothing a wrong provider is sure of.
+
+Use `auto` where stale data costs more than a few wrong records, and read its alerts. Keep `propose`, the default, where a wrong record costs more than a late one. A spec that doesn't set `heal.mode` never promotes a repair by itself.
+
 The other settings:
 
 - **`heal.anchors`** is the number of known-good records kept for verifying repairs. More anchors catch errors that affect fewer records.

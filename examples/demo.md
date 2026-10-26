@@ -145,5 +145,5 @@ scrapemend run examples/sources/demo.yaml --out after.jsonl
 - **Undo:** `scrapemend rollback examples/sources/demo.yaml` makes v1 active again.
 - **The harder redesign:** `curl.exe -X POST http://127.0.0.1:8000/admin/layout/3` is a card grid where several fields are merged into lines of text. The repair is `examples/repairs/demo-v3.yaml`, or ask Claude.
 - **Failure modes:** restart the site with `--chaos flaky`, `--chaos ratelimit` or `--chaos blocked`. The first two still succeed, thanks to retries and backoff. Blocked stops at once with exit code 2 and is never retried.
-- **Repair without a human:** set `heal: { mode: auto }` in a copy of the spec (with a new `version`). A verified repair is then promoted immediately, and the run scrapes again with it.
+- **Repair without a human:** set `heal: { mode: auto }` in a copy of the spec (with a new `version`). A verified repair is then promoted immediately, and the run scrapes again with it. The new version is provisional: its runs don't become the last good run until you check them and run `scrapemend confirm`. [Choosing `auto`](../docs/writing-specs.md#healing-settings) says what that trades away.
 - **History:** `scrapemend runs` shows every run and its status.

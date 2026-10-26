@@ -920,6 +920,29 @@ def test_an_outage_during_heal_leaves_the_repair_unverified(world: World) -> Non
     assert proposal.report.check("listing").status == "not run"
 
 
+def test_a_spec_that_does_not_choose_a_heal_mode_never_promotes_by_itself(world: World) -> None:
+    # Auto mode puts a repair's output in front of no one: it is chosen in the spec,
+    # never had by default. A repair that passes, after a layout change, waits.
+    data = file_spec(version=2).model_dump(mode="json", exclude_unset=True)
+    data["heal"].pop("mode")
+    spec = SourceSpec.model_validate(data)
+    assert spec.heal.mode == "propose"
+    world.state.specs.register(spec)
+    world.layout(2)
+    spec = world.spec
+    provider = PatchProvider(load_patch(REPAIRS / "demo-v2.yaml"))
+    first, outcome, second = run_and_heal(
+        spec, world.state, world.snapshots, fetcher(world.site, spec), provider,
+        notifier=world.events, rebase=world.rebase,
+    )  # fmt: skip
+    assert first.status == "layout_changed"
+    assert outcome is not None and outcome.status == "proposed", outcome
+    assert "heal.mode is propose" in outcome.message
+    assert second is None
+    active = world.state.specs.active("tenders-demo")
+    assert active is not None and active.version == 2
+
+
 def test_partial_failure_is_proposed_not_auto_promoted(world: World) -> None:
     category = load_spec(DEMO_SPEC).fields["category"].model_dump(mode="json")
     category["strategies"] = [{"css": "dd.gone"}]
