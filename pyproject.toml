@@ -43,6 +43,13 @@ dev = [
 demo = ["fastapi>=0.115", "uvicorn>=0.30", "jinja2>=3.1"]
 anthropic = ["anthropic>=2.3"]
 
+[project.urls]
+Homepage = "https://github.com/smiesny0lo/specmend"
+Documentation = "https://github.com/smiesny0lo/specmend/tree/main/docs"
+Repository = "https://github.com/smiesny0lo/specmend"
+Issues = "https://github.com/smiesny0lo/specmend/issues"
+Changelog = "https://github.com/smiesny0lo/specmend/blob/main/CHANGELOG.md"
+
 [project.scripts]
 specmend = "specmend.cli:app"
 
