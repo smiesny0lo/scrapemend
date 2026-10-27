@@ -10,7 +10,18 @@ scrape v1 ──> site redesigned ──> layout_changed: title, category, ... b
 
 Scrapers are written as **specs**: YAML that says where items are and how to read each field. A spec is data, never code, so a repair is a new spec version that can be diffed, reviewed and rolled back. Nothing an LLM returns is ever executed.
 
+## Install
+
+Requires Python 3.13+.
+
+```sh
+pip install specmend                 # the engine and the specmend command
+pip install "specmend[anthropic]"    # with Claude as a repair provider
+```
+
 ## The demo, in one command
+
+The demo site and its scripts live in the repository, not in the package:
 
 ```sh
 git clone https://github.com/smiesny0lo/specmend && cd specmend
@@ -76,14 +87,14 @@ python examples/run_demo.py --provider anthropic
 python examples/run_demo.py --provider anthropic --layout 3   # the harder redesign
 ```
 
-For the same story one command at a time, see [examples/demo.md](examples/demo.md).
+For the same story one command at a time, see [examples/demo.md](https://github.com/smiesny0lo/specmend/blob/main/examples/demo.md).
 
 ## How it works
 
 1. **Scrape.** Each field lists several strategies (css, xpath, label, regex, or a plugin's). The first one whose text converts to the field's type wins. Every downloaded page is kept as a snapshot: for the newest 10 runs, and for older runs that a comparison or a repair still needs.
 2. **Detect.** Every run is compared with the last good one, using page-structure fingerprints, per-field empty rates, and which strategies won. The run is classified as `ok`, `drift`, `blocked`, `transient`, `layout_changed`, `empty` or `partial`.
 3. **Repair.** A provider proposes a patch: new selectors and strategies, nothing else. It can't change the start URL, the rate limit, field types or the checks.
-4. **Verify.** Quick checks first: on pages under the new layout, every field must reproduce the known values of the **anchor** records, each field on its own, and the listing and the next-page link must still work. Then the **shadow run**: the repaired spec crawls the source, politely, and its records are compared with the last good run's, by key (on a large source, every listing page and a sample of the detail pages). Stable fields must be identical on every record both runs have; a volatile one (a price, a status) may have changed on at most 10% of them, and a value may never become empty. No kind of record may be missing, and no number field wrong on its largest or smallest values. Records new since the last good run get only lighter checks, and the report says how many there were. A provider's regexes run on RE2, which no page can make slow. [What the gate guarantees, and what it can't catch](docs/verification.md#what-the-gate-guarantees).
+4. **Verify.** Quick checks first: on pages under the new layout, every field must reproduce the known values of the **anchor** records, each field on its own, and the listing and the next-page link must still work. Then the **shadow run**: the repaired spec crawls the source, politely, and its records are compared with the last good run's, by key (on a large source, every listing page and a sample of the detail pages). Stable fields must be identical on every record both runs have; a volatile one (a price, a status) may have changed on at most 10% of them, and a value may never become empty. No kind of record may be missing, and no number field wrong on its largest or smallest values. Records new since the last good run get only lighter checks, and the report says how many there were. A provider's regexes run on RE2, which no page can make slow. [What the gate guarantees, and what it can't catch](https://github.com/smiesny0lo/specmend/blob/main/docs/verification.md#what-the-gate-guarantees).
 5. **Promote or quarantine.** A repair that passed every check becomes the next spec version, either automatically (`heal.mode: auto`, with structural evidence, as a provisional version until you `specmend confirm` it) or after `specmend promote`. If nothing passes, the source is quarantined and an alert goes to your notifiers (`--notify`). A repair whose checks couldn't all run (a page that won't load) is never promoted automatically: only `specmend promote --force`, never past a check that failed.
 6. **Watch.** The runs after a promotion are compared with the last good run: an emptier field, a common status gone, or more than 10% of a number field's values changing magnitude are `drift`, and alert. A drift run never becomes the last good run by itself, so every run alerts until a human checks the data and runs `specmend accept-drift`. Neither does a run of a version promoted automatically, until you `specmend confirm` it.
 
@@ -92,7 +103,7 @@ Blocks are never worked around. A 401/403, a robots.txt disallow or a bot-wall p
 ## Quick start with your own site
 
 ```sh
-pip install -e .                     # or with the anthropic extra
+pip install specmend               # or "specmend[anthropic]"
 specmend validate my-source.yaml   # every problem, with its line number
 specmend run my-source.yaml --out records.jsonl
 specmend check my-source.yaml      # a 5-item health check
@@ -107,15 +118,15 @@ specmend diff my-source.yaml 1
 specmend promote my-source.yaml 1
 ```
 
-Start from [examples/sources/demo.yaml](examples/sources/demo.yaml). Exit codes: 0 good, 1 usage error, 2 blocked or unreachable, 3 broken data.
+Start from [examples/sources/demo.yaml](https://github.com/smiesny0lo/specmend/blob/main/examples/sources/demo.yaml). Exit codes: 0 good, 1 usage error, 2 blocked or unreachable, 3 broken data.
 
 ## Documentation
 
-- [Writing specs](docs/writing-specs.md): fields, strategies, normalizers, expectations, versions
-- [Running specmend](docs/running.md): commands, statuses, politeness, alerts, scheduling, the Python API
-- [Verification, explained](docs/verification.md): anchors, the shadow run, failing closed, what the gate guarantees
-- [Repair providers](docs/providers.md): the anthropic provider, hand-written patches, writing your own
-- [Custom strategies](docs/custom-strategies.md): plugins for anything css, xpath, label and regex can't reach
+- [Writing specs](https://github.com/smiesny0lo/specmend/blob/main/docs/writing-specs.md): fields, strategies, normalizers, expectations, versions
+- [Running specmend](https://github.com/smiesny0lo/specmend/blob/main/docs/running.md): commands, statuses, politeness, alerts, scheduling, the Python API
+- [Verification, explained](https://github.com/smiesny0lo/specmend/blob/main/docs/verification.md): anchors, the shadow run, failing closed, what the gate guarantees
+- [Repair providers](https://github.com/smiesny0lo/specmend/blob/main/docs/providers.md): the anthropic provider, hand-written patches, writing your own
+- [Custom strategies](https://github.com/smiesny0lo/specmend/blob/main/docs/custom-strategies.md): plugins for anything css, xpath, label and regex can't reach
 
 ## Status
 
@@ -123,7 +134,7 @@ v0.1: a working core. It has been tested against the bundled demo site, includin
 
 ## Development
 
-Requires Python 3.13+.
+From a clone of the repository:
 
 ```sh
 pip install -e ".[dev]"
@@ -133,8 +144,8 @@ ruff check . && ruff format .
 mypy                       # strict
 ```
 
-The demo site runs by itself with `python -m examples.mutating_site --layout 2 --chaos flaky`. See [its README](examples/mutating_site/README.md). Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+The demo site runs by itself with `python -m examples.mutating_site --layout 2 --chaos flaky`. See [its README](https://github.com/smiesny0lo/specmend/blob/main/examples/mutating_site/README.md). Contributions are welcome; see [CONTRIBUTING.md](https://github.com/smiesny0lo/specmend/blob/main/CONTRIBUTING.md).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/smiesny0lo/specmend/blob/main/LICENSE)
